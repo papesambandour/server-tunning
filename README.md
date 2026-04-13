@@ -28,7 +28,7 @@ Optimise pour les workloads **CPU-bound** : OCR (PaddleOCR, Tesseract, docTR), i
 ## Installation rapide (une seule commande)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/install.sh | sudo bash
 ```
 
 Cette commande telecharge `setup.sh` et `.env.example` dans `~/server-tunning/`, puis lance le menu.
@@ -38,8 +38,8 @@ Ou manuellement :
 ```bash
 # 1. Telecharger dans ~/server-tunning/
 mkdir -p ~/server-tunning && cd ~/server-tunning
-curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/setup.sh -o setup.sh
-curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/.env.example -o .env
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/.env.example -o .env
 chmod +x setup.sh
 
 # 2. Configurer
