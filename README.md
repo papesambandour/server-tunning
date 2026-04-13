@@ -28,18 +28,19 @@ Optimise pour les workloads **CPU-bound** : OCR (PaddleOCR, Tesseract, docTR), i
 ## Installation rapide (une seule commande)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/setup.sh -o setup.sh && \
-curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/.env.example -o .env && \
-nano .env && \
-sudo bash setup.sh --env .env
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/install.sh | sudo bash
 ```
 
-Ou etape par etape :
+Cette commande telecharge `setup.sh` et `.env.example` dans `~/server-tunning/`, puis lance le menu.
+
+Ou manuellement :
 
 ```bash
-# 1. Telecharger
+# 1. Telecharger dans ~/server-tunning/
+mkdir -p ~/server-tunning && cd ~/server-tunning
 curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/setup.sh -o setup.sh
 curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/.env.example -o .env
+chmod +x setup.sh
 
 # 2. Configurer
 nano .env
@@ -51,8 +52,8 @@ sudo bash setup.sh --env .env
 Ou via git clone :
 
 ```bash
-git clone https://github.com/papesambandour/server-tunning.git
-cd server-tunning
+git clone https://github.com/papesambandour/server-tunning.git ~/server-tunning
+cd ~/server-tunning
 cp .env.example .env
 nano .env
 sudo bash setup.sh --env .env
