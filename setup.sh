@@ -557,13 +557,13 @@ do_deploy() {
 
     # Choix de la branch/tag
     echo -e "  ${BOLD}Source :${NC}"
-    echo -e "    ${CYAN}1${NC}  main (defaut)"
+    echo -e "    ${CYAN}1${NC}  $GIT_BRANCH (defaut .env)"
     echo -e "    ${CYAN}2${NC}  Autre branche"
     echo -e "    ${CYAN}3${NC}  Tag specifique"
     echo ""
     read -p "  Choix (1/2/3) : " -n 1 -r SRC_CHOICE; echo
 
-    BRANCH="main"
+    BRANCH="$GIT_BRANCH"
     case $SRC_CHOICE in
         2) read -p "  Nom de la branche : " BRANCH ;;
         3) read -p "  Nom du tag : " TAG_NAME; BRANCH="" ;;
