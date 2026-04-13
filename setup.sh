@@ -251,10 +251,15 @@ LIMITS
         grep -q "/swap.img" /etc/fstab || echo "/swap.img none swap sw 0 0" >> /etc/fstab
     fi
 
-    # CPU governor performance
-    for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        echo "performance" > "$cpu" 2>/dev/null || true
-    done
+    # CPU governor performance (ignore sur les VMs sans cpufreq)
+    if [[ -d /sys/devices/system/cpu/cpu0/cpufreq ]]; then
+        for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            echo "performance" > "$cpu" 2>/dev/null || true
+        done
+        ok "CPU governor = performance"
+    else
+        ok "cpufreq non disponible (VM) — gere par l'hyperviseur"
+    fi
 
     ok "Tuning applique"
 }
