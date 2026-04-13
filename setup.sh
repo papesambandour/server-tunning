@@ -326,30 +326,29 @@ do_install_python() {
         $PYTHON_VERSION -m venv $VENV_DIR
     fi
 
-    log "Installation PyTorch CPU..."
     $VENV_DIR/bin/pip install --upgrade pip -q
-    $VENV_DIR/bin/pip install --no-cache-dir \
-        torch==2.3.0+cpu torchvision==0.18.0+cpu \
-        -f https://download.pytorch.org/whl/cpu/torch_stable.html -q
-    ok "PyTorch CPU OK"
 
     if [[ -f "$APP_DIR/requirements.txt" ]]; then
         log "Installation des deps Python..."
         $VENV_DIR/bin/pip install --no-cache-dir -r $APP_DIR/requirements.txt -q
         ok "Deps Python OK"
     else
-        warn "Pas de requirements.txt — deployer le code d'abord (menu 4)"
+        warn "Pas de requirements.txt — deployer le code d'abord (menu 5)"
     fi
 
-    # Modeles
-    log "Pre-telechargement des modeles..."
-    TORCH_HOME=$APP_DIR/.cache/torch $VENV_DIR/bin/python -c "
-import torchvision.models as m; m.resnet18(weights=m.ResNet18_Weights.DEFAULT)
-print('ResNet18 OK')
-" 2>/dev/null || warn "ResNet18 non telecharge"
+    # Verification modeles
+    log "Verification des modeles..."
     $VENV_DIR/bin/python -c "
+import onnxruntime as ort; print(f'ONNX Runtime {ort.__version__} OK')
 from rapidocr_onnxruntime import RapidOCR; RapidOCR(); print('RapidOCR OK')
-" 2>/dev/null || warn "RapidOCR non telecharge"
+import os
+onnx_path = os.path.join('$APP_DIR', 'engine', 'resnet18_features.onnx')
+if os.path.exists(onnx_path):
+    sess = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+    print('ResNet18 ONNX OK')
+else:
+    print(f'WARN: {onnx_path} non trouve')
+" 2>/dev/null || warn "Modeles non verifies"
 
     # Donner tous les droits au user app (venv, cache, code)
     chown -R $APP_USER:$APP_USER $APP_DIR
@@ -375,13 +374,11 @@ Type=notify
 User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR
-Environment="TORCH_HOME=$APP_DIR/.cache/torch"
 Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin"
 Environment="OMP_NUM_THREADS=2"
 Environment="MKL_NUM_THREADS=2"
 Environment="ORT_NUM_THREADS=2"
 Environment="OMP_THREAD_LIMIT=2"
-Environment="PYTORCH_NUM_THREADS=1"
 
 ExecStart=$VENV_DIR/bin/gunicorn main:app \\
     --worker-class uvicorn.workers.UvicornWorker \\
@@ -602,9 +599,12 @@ do_deploy() {
 
     # Modeles
     log "Verification des modeles..."
-    TORCH_HOME=$APP_DIR/.cache/torch $VENV_DIR/bin/python -c "
-import torchvision.models as m; m.resnet18(weights=m.ResNet18_Weights.DEFAULT)
+    $VENV_DIR/bin/python -c "
 from rapidocr_onnxruntime import RapidOCR; RapidOCR()
+import onnxruntime as ort, os
+onnx_path = os.path.join('$APP_DIR', 'engine', 'resnet18_features.onnx')
+if os.path.exists(onnx_path):
+    ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
 print('OK')
 " 2>/dev/null && ok "Modeles OK" || warn "Verifier les modeles"
 
