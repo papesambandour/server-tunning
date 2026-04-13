@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO="papesambandour/server-tunning"
-BRANCH="main"
+BRANCH="master"
 INSTALL_DIR="${HOME}/server-tunning"
 BASE_URL="https://raw.githubusercontent.com/$REPO/$BRANCH"
 
