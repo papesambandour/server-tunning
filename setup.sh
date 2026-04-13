@@ -370,7 +370,7 @@ Description=AI-YAS-KYC — API verification identite
 After=network.target
 
 [Service]
-Type=notify
+Type=simple
 User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR
@@ -404,7 +404,19 @@ EOF
 
     systemctl daemon-reload
     systemctl enable $SERVICE -q
-    ok "Service $SERVICE.service ($GUNICORN_WORKERS workers, port $BIND_PORT)"
+    systemctl restart $SERVICE 2>/dev/null || systemctl start $SERVICE
+
+    # Attendre que le service demarre
+    local RETRIES=0
+    while [[ $RETRIES -lt 15 ]]; do
+        if systemctl is-active --quiet $SERVICE 2>/dev/null; then
+            ok "Service $SERVICE.service demarre ($GUNICORN_WORKERS workers, port $BIND_PORT)"
+            return
+        fi
+        RETRIES=$((RETRIES + 1))
+        sleep 1
+    done
+    warn "Service cree mais pas encore actif — verifier : journalctl -u $SERVICE -n 20"
 }
 
 do_install_nginx() {
