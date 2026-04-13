@@ -88,6 +88,7 @@ fi
 CURRENT_IP=$(hostname -I | awk '{print $1}')
 
 # ── Checks d'etat ────────────────────────────────────────────
+is_prereqs_installed()  { command -v git &>/dev/null && command -v curl &>/dev/null && command -v make &>/dev/null; }
 is_python_installed()   { [[ -f "$VENV_DIR/bin/python" ]]; }
 is_app_installed()      { [[ -f "$APP_DIR/main.py" ]]; }
 is_service_installed()  { systemctl list-unit-files | grep -q "$SERVICE.service"; }
@@ -107,7 +108,7 @@ show_header() {
     clear
     echo -e "${CYAN}"
     echo "  ╔══════════════════════════════════════════════════╗"
-    echo "  ║         AI-YAS-KYC — Setup & Deploy             ║"
+    echo "  ║         Server Setup & Deploy                    ║"
     echo "  ╠══════════════════════════════════════════════════╣"
     echo -e "  ║  Serveur : ${BOLD}$CURRENT_IP${NC}${CYAN}                          ║"
     echo -e "  ║  App 1   : $SERVER1:$BIND_PORT                       ║"
@@ -121,8 +122,9 @@ show_header() {
 show_status() {
     echo -e "  ${BOLD}Etat du serveur $CURRENT_IP :${NC}"
     echo ""
+    echo -e "    $(status_icon is_prereqs_installed)  Prerequis (git, curl, build-essential)"
     echo -e "    $(status_icon is_tuning_applied)  OS Tuning (sysctl, ulimits)"
-    echo -e "    $(status_icon is_python_installed)  Python 3.9 + venv"
+    echo -e "    $(status_icon is_python_installed)  $PYTHON_VERSION + venv"
     echo -e "    $(status_icon is_ocrb_installed)  Tesseract + OCRB"
     echo -e "    $(status_icon is_app_installed)  Code app ($APP_DIR)"
     echo -e "    $(status_icon is_service_installed)  Service systemd ($SERVICE)"
@@ -148,6 +150,53 @@ show_status() {
 # ════════════════════════════════════════════════════════════
 # INSTALLATION
 # ════════════════════════════════════════════════════════════
+
+do_prereqs() {
+    section "Prerequis de base"
+
+    if is_prereqs_installed; then
+        ok "Prerequis deja installes"
+        echo -e "    git     : $(git --version 2>/dev/null | cut -d' ' -f3)"
+        echo -e "    curl    : $(curl --version 2>/dev/null | head -1 | cut -d' ' -f2)"
+        echo -e "    make    : $(make --version 2>/dev/null | head -1)"
+        read -p "  Reinstaller / mettre a jour ? (o/N) " -n 1 -r; echo
+        [[ ! $REPLY =~ ^[Oo]$ ]] && return
+    fi
+
+    log "Mise a jour des paquets..."
+    apt-get update -qq
+
+    log "Installation des prerequis..."
+    apt-get install -y --no-install-recommends \
+        sudo \
+        git \
+        curl \
+        wget \
+        build-essential \
+        make \
+        software-properties-common \
+        apt-transport-https \
+        ca-certificates \
+        gnupg \
+        lsb-release \
+        unzip \
+        htop \
+        iotop \
+        net-tools \
+        jq \
+        tree \
+        vim \
+        > /dev/null
+
+    ok "Prerequis installes"
+    echo ""
+    echo -e "    git             : $(git --version 2>/dev/null | cut -d' ' -f3)"
+    echo -e "    curl            : $(curl --version 2>/dev/null | head -1 | cut -d' ' -f2)"
+    echo -e "    make            : $(make --version 2>/dev/null | head -1 | awk '{print $NF}')"
+    echo -e "    jq              : $(jq --version 2>/dev/null)"
+    echo -e "    build-essential : OK"
+    echo -e "    htop/iotop      : OK (monitoring)"
+}
 
 do_tuning() {
     section "OS Tuning"
@@ -194,10 +243,10 @@ LIMITS
     grep -q "pam_limits.so" /etc/pam.d/common-session 2>/dev/null || \
         echo "session required pam_limits.so" >> /etc/pam.d/common-session
 
-    # Swap securite 4G
+    # Swap securite
     if ! swapon --show | grep -q .; then
-        log "Creation swap 4G..."
-        fallocate -l 4G /swap.img 2>/dev/null || dd if=/dev/zero of=/swap.img bs=1G count=4 2>/dev/null
+        log "Creation swap $SWAP_SIZE..."
+        fallocate -l $SWAP_SIZE /swap.img 2>/dev/null || dd if=/dev/zero of=/swap.img bs=1M count=$((${SWAP_SIZE%G} * 1024)) 2>/dev/null
         chmod 600 /swap.img && mkswap /swap.img > /dev/null && swapon /swap.img
         grep -q "/swap.img" /etc/fstab || echo "/swap.img none swap sw 0 0" >> /etc/fstab
     fi
@@ -221,11 +270,20 @@ do_install_python() {
 
     log "Installation des paquets systeme..."
     apt-get update -qq
+
+    # Sur Ubuntu 24.04, Python 3.9/3.11 n'est pas natif — utiliser deadsnakes PPA
+    if ! apt-cache show $PYTHON_VERSION 2>/dev/null | grep -q "Package:"; then
+        log "$PYTHON_VERSION non disponible — ajout du PPA deadsnakes..."
+        apt-get install -y --no-install-recommends software-properties-common > /dev/null
+        add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null
+        apt-get update -qq
+    fi
+
     apt-get install -y --no-install-recommends \
         $PYTHON_VERSION ${PYTHON_VERSION}-venv ${PYTHON_VERSION}-dev python3-pip \
         tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra \
         libgl1 libglib2.0-0 git curl build-essential > /dev/null
-    ok "Paquets systeme OK"
+    ok "Paquets systeme OK ($($PYTHON_VERSION --version 2>&1), $(tesseract --version 2>&1 | head -1))"
 
     # OCRB
     if ! is_ocrb_installed; then
@@ -612,19 +670,20 @@ while true; do
     show_status
 
     echo -e "  ${BOLD}── Installation ──${NC}"
-    echo -e "    ${CYAN}1${NC}  OS Tuning (kernel, swap, CPU governor)"
-    echo -e "    ${CYAN}2${NC}  Python + App + Service systemd"
-    echo -e "    ${CYAN}3${NC}  Nginx Load Balancer (serveur 1 uniquement)"
+    echo -e "    ${CYAN}1${NC}  Prerequis (git, curl, build-essential, htop, jq...)"
+    echo -e "    ${CYAN}2${NC}  OS Tuning (kernel, swap, CPU governor)"
+    echo -e "    ${CYAN}3${NC}  Python + App + Service systemd"
+    echo -e "    ${CYAN}4${NC}  Nginx Load Balancer (serveur LB uniquement)"
     echo ""
     echo -e "  ${BOLD}── Deploiement ──${NC}"
-    echo -e "    ${CYAN}4${NC}  Deploy (rolling zero-downtime sur les 2 serveurs)"
+    echo -e "    ${CYAN}5${NC}  Deploy (git pull + restart)"
     echo ""
     echo -e "  ${BOLD}── Operations ──${NC}"
-    echo -e "    ${CYAN}5${NC}  Start service"
-    echo -e "    ${CYAN}6${NC}  Stop service"
-    echo -e "    ${CYAN}7${NC}  Restart service"
-    echo -e "    ${CYAN}8${NC}  Logs (live)"
-    echo -e "    ${CYAN}9${NC}  Test tous les backends"
+    echo -e "    ${CYAN}6${NC}  Start service"
+    echo -e "    ${CYAN}7${NC}  Stop service"
+    echo -e "    ${CYAN}8${NC}  Restart service"
+    echo -e "    ${CYAN}9${NC}  Logs (live)"
+    echo -e "    ${CYAN}t${NC}  Test tous les backends"
     echo ""
     echo -e "    ${CYAN}0${NC}  Quitter"
     echo ""
@@ -633,15 +692,16 @@ while true; do
     echo ""
 
     case $CHOICE in
-        1) do_tuning ;;
-        2) do_install_python ;;
-        3) do_install_nginx ;;
-        4) do_deploy ;;
-        5) do_start ;;
-        6) do_stop ;;
-        7) do_restart ;;
-        8) do_logs ;;
-        9) do_test ;;
+        1) do_prereqs ;;
+        2) do_tuning ;;
+        3) do_install_python ;;
+        4) do_install_nginx ;;
+        5) do_deploy ;;
+        6) do_start ;;
+        7) do_stop ;;
+        8) do_restart ;;
+        9) do_logs ;;
+        t|T) do_test ;;
         0) echo -e "${GREEN}Bye.${NC}"; exit 0 ;;
         *) warn "Choix invalide" ;;
     esac

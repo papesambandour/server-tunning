@@ -25,21 +25,37 @@ Optimise pour les workloads **CPU-bound** : OCR (PaddleOCR, Tesseract, docTR), i
 - **Un seul script** — `setup.sh` fait tout (install, config, deploy, operations)
 - **100% configurable** — toutes les valeurs dans un `.env`
 
-## Quickstart
+## Installation rapide (une seule commande)
 
 ```bash
-# 1. Cloner
-git clone https://github.com/votre-org/server-tunning.git
-cd server-tunning
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/setup.sh -o setup.sh && \
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/.env.example -o .env && \
+nano .env && \
+sudo bash setup.sh --env .env
+```
+
+Ou etape par etape :
+
+```bash
+# 1. Telecharger
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/main/.env.example -o .env
 
 # 2. Configurer
-cp .env.example .env
 nano .env
 
-# 3. Copier sur le serveur et lancer
-scp setup.sh .env user@votre-serveur:/tmp/
-ssh user@votre-serveur
-sudo bash /tmp/setup.sh --env /tmp/.env
+# 3. Lancer
+sudo bash setup.sh --env .env
+```
+
+Ou via git clone :
+
+```bash
+git clone https://github.com/papesambandour/server-tunning.git
+cd server-tunning
+cp .env.example .env
+nano .env
+sudo bash setup.sh --env .env
 ```
 
 Le menu interactif s'affiche :
@@ -54,22 +70,24 @@ Le menu interactif s'affiche :
   ╚══════════════════════════════════════════════════╝
 
   Etat du serveur :
+    ✗  Prerequis (git, curl, build-essential)
     ✓  OS Tuning (sysctl, ulimits)
     ✓  Python 3.9 + venv
     ✗  Code app
     ✗  Service systemd
 
   ── Installation ──
-    1  OS Tuning
-    2  Python + App + Service
-    3  Nginx Load Balancer
+    1  Prerequis (git, curl, build-essential, htop, jq...)
+    2  OS Tuning (kernel, swap, CPU governor)
+    3  Python + App + Service systemd
+    4  Nginx Load Balancer (serveur LB uniquement)
 
   ── Deploiement ──
-    4  Deploy (git pull + restart)
+    5  Deploy (git pull + restart)
 
   ── Operations ──
-    5  Start    6  Stop    7  Restart
-    8  Logs     9  Test backends
+    6  Start    7  Stop    8  Restart
+    9  Logs     t  Test backends
     0  Quitter
 ```
 
@@ -79,15 +97,16 @@ Le menu interactif s'affiche :
 
 ```bash
 sudo bash setup.sh --env .env
-# → 1 (OS Tuning)
-# → 2 (Python + App + Service)
+# → 1 (Prerequis)
+# → 2 (OS Tuning)
+# → 3 (Python + App + Service)
 ```
 
 ### Sur le serveur Nginx (un seul)
 
 ```bash
 sudo bash setup.sh --env .env
-# → 3 (Nginx Load Balancer)
+# → 4 (Nginx Load Balancer)
 ```
 
 ## Deploiement
@@ -98,12 +117,12 @@ Deploiement rolling zero-downtime — un serveur a la fois :
 # 1. Se connecter sur le serveur 2
 ssh user@serveur-2
 sudo bash setup.sh --env .env
-# → 4 (Deploy) — nginx bascule le trafic sur le serveur 1
+# → 5 (Deploy) — nginx bascule le trafic sur le serveur 1
 
 # 2. Se connecter sur le serveur 1
 ssh user@serveur-1
 sudo bash setup.sh --env .env
-# → 4 (Deploy) — nginx bascule le trafic sur le serveur 2
+# → 5 (Deploy) — nginx bascule le trafic sur le serveur 2
 
 # Resultat : zero downtime, les 2 serveurs sont a jour
 ```
