@@ -1,0 +1,8 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# Config locale (contient les IPs, mots de passe)
+.env
+!.env.example
