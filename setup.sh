@@ -301,7 +301,25 @@ do_install_python() {
 
     # Utilisateur
     id "$APP_USER" &>/dev/null || useradd -r -s /bin/bash -m -d /home/$APP_USER $APP_USER
-    mkdir -p $APP_DIR && chown $APP_USER:$APP_USER $APP_DIR
+
+    # Clone du repo (si pas deja fait)
+    if [[ ! -d "$APP_DIR/.git" ]]; then
+        if [[ -n "$GIT_REPO" ]]; then
+            log "Clone du repo dans $APP_DIR..."
+            # Si le dossier existe mais pas de .git → vider d'abord
+            if [[ -d "$APP_DIR" ]]; then
+                rm -rf "$APP_DIR"
+            fi
+            sudo -u $APP_USER git clone -b "$GIT_BRANCH" "$GIT_REPO" "$APP_DIR"
+            ok "Repo clone ($GIT_BRANCH)"
+        else
+            mkdir -p $APP_DIR
+            warn "Pas de KYC_GIT_REPO dans le .env — code a copier manuellement dans $APP_DIR"
+        fi
+    else
+        ok "Repo deja clone dans $APP_DIR"
+    fi
+    chown -R $APP_USER:$APP_USER $APP_DIR
 
     # Venv
     if [[ ! -f "$VENV_DIR/bin/python" ]]; then
