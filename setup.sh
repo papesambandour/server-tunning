@@ -306,11 +306,10 @@ do_install_python() {
     if [[ ! -d "$APP_DIR/.git" ]]; then
         if [[ -n "$GIT_REPO" ]]; then
             log "Clone du repo dans $APP_DIR..."
-            # Si le dossier existe mais pas de .git → vider d'abord
             if [[ -d "$APP_DIR" ]]; then
                 rm -rf "$APP_DIR"
             fi
-            sudo -u $APP_USER git clone -b "$GIT_BRANCH" "$GIT_REPO" "$APP_DIR"
+            git clone -b "$GIT_BRANCH" "$GIT_REPO" "$APP_DIR"
             ok "Repo clone ($GIT_BRANCH)"
         else
             mkdir -p $APP_DIR
@@ -324,19 +323,19 @@ do_install_python() {
     # Venv
     if [[ ! -f "$VENV_DIR/bin/python" ]]; then
         log "Creation du venv..."
-        sudo -u $APP_USER $PYTHON_VERSION -m venv $VENV_DIR
+        $PYTHON_VERSION -m venv $VENV_DIR
     fi
 
     log "Installation PyTorch CPU..."
-    sudo -u $APP_USER $VENV_DIR/bin/pip install --upgrade pip -q
-    sudo -u $APP_USER $VENV_DIR/bin/pip install --no-cache-dir \
+    $VENV_DIR/bin/pip install --upgrade pip -q
+    $VENV_DIR/bin/pip install --no-cache-dir \
         torch==2.3.0+cpu torchvision==0.18.0+cpu \
         -f https://download.pytorch.org/whl/cpu/torch_stable.html -q
     ok "PyTorch CPU OK"
 
     if [[ -f "$APP_DIR/requirements.txt" ]]; then
         log "Installation des deps Python..."
-        sudo -u $APP_USER $VENV_DIR/bin/pip install --no-cache-dir -r $APP_DIR/requirements.txt -q
+        $VENV_DIR/bin/pip install --no-cache-dir -r $APP_DIR/requirements.txt -q
         ok "Deps Python OK"
     else
         warn "Pas de requirements.txt — deployer le code d'abord (menu 4)"
@@ -344,13 +343,17 @@ do_install_python() {
 
     # Modeles
     log "Pre-telechargement des modeles..."
-    sudo -u $APP_USER TORCH_HOME=$APP_DIR/.cache/torch $VENV_DIR/bin/python -c "
+    TORCH_HOME=$APP_DIR/.cache/torch $VENV_DIR/bin/python -c "
 import torchvision.models as m; m.resnet18(weights=m.ResNet18_Weights.DEFAULT)
 print('ResNet18 OK')
 " 2>/dev/null || warn "ResNet18 non telecharge"
-    sudo -u $APP_USER $VENV_DIR/bin/python -c "
+    $VENV_DIR/bin/python -c "
 from rapidocr_onnxruntime import RapidOCR; RapidOCR(); print('RapidOCR OK')
 " 2>/dev/null || warn "RapidOCR non telecharge"
+
+    # Donner tous les droits au user app (venv, cache, code)
+    chown -R $APP_USER:$APP_USER $APP_DIR
+    ok "Droits $APP_USER appliques sur $APP_DIR"
 
     # Service systemd
     do_install_service
@@ -568,13 +571,13 @@ do_deploy() {
     # Git pull
     log "Git fetch + pull..."
     cd $APP_DIR
-    sudo -u $APP_USER git fetch --all --prune -q 2>/dev/null
+    git fetch --all --prune -q 2>/dev/null
 
     if [[ -n "${TAG_NAME:-}" ]]; then
-        sudo -u $APP_USER git checkout "$TAG_NAME" -q 2>/dev/null
+        git checkout "$TAG_NAME" -q 2>/dev/null
     else
-        sudo -u $APP_USER git checkout "$BRANCH" -q 2>/dev/null
-        sudo -u $APP_USER git pull origin "$BRANCH" -q 2>/dev/null
+        git checkout "$BRANCH" -q 2>/dev/null
+        git pull origin "$BRANCH" -q 2>/dev/null
     fi
 
     NEW=$(git rev-parse --short HEAD)
@@ -590,7 +593,7 @@ do_deploy() {
     if [[ -f requirements.txt ]]; then
         if [[ "$PREV" != "$NEW" ]] && git diff "$PREV" "$NEW" -- requirements.txt 2>/dev/null | grep -q .; then
             log "requirements.txt a change — mise a jour des deps..."
-            sudo -u $APP_USER $VENV_DIR/bin/pip install --no-cache-dir -r requirements.txt -q
+            $VENV_DIR/bin/pip install --no-cache-dir -r requirements.txt -q
             ok "Deps mises a jour"
         else
             ok "Deps inchangees"
@@ -599,11 +602,14 @@ do_deploy() {
 
     # Modeles
     log "Verification des modeles..."
-    sudo -u $APP_USER TORCH_HOME=$APP_DIR/.cache/torch $VENV_DIR/bin/python -c "
+    TORCH_HOME=$APP_DIR/.cache/torch $VENV_DIR/bin/python -c "
 import torchvision.models as m; m.resnet18(weights=m.ResNet18_Weights.DEFAULT)
 from rapidocr_onnxruntime import RapidOCR; RapidOCR()
 print('OK')
 " 2>/dev/null && ok "Modeles OK" || warn "Verifier les modeles"
+
+    # Remettre les droits au user app
+    chown -R $APP_USER:$APP_USER $APP_DIR
 
     # Redemarrer
     log "Demarrage du service..."
