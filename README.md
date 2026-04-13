@@ -1,6 +1,8 @@
-# SERVER-TUNNING — Deploiement AI-YAS-KYC sur serveurs bare-metal
+# server-tunning
 
-Setup et deploiement de l'API de verification d'identite KYC sur 2 serveurs Ubuntu avec load balancing Nginx.
+Script Bash interactif pour installer, configurer et deployer des applications Python CPU-bound (OCR, IA, ML) sur des serveurs Ubuntu bare-metal avec load balancing Nginx.
+
+Optimise pour les workloads **CPU-bound** : OCR (PaddleOCR, Tesseract, docTR), inference PyTorch/ONNX, traitement d'images.
 
 ## Architecture
 
@@ -12,66 +14,48 @@ Setup et deploiement de l'API de verification d'identite KYC sur 2 serveurs Ubun
                least_conn
               ┌────────────────┐
               ▼                ▼
-      10.0.92.66:8000   10.0.92.67:8000
-      8 workers gunicorn  8 workers gunicorn
-      Python 3.9 natif    Python 3.9 natif
-      RapidOCR + Tesseract OCRB
+     Serveur 1 (:8000)  Serveur 2 (:8000)
+     N workers gunicorn   N workers gunicorn
+     Python natif          Python natif
 ```
 
 - **Pas de Docker** — Python natif pour maximiser la performance CPU
-- **16 workers paralleles** — 8 par serveur (CPU/3 pour OCR CPU-bound)
+- **Workers = CPU / 3** — optimise pour les workloads CPU-bound (OCR, IA)
 - **Zero downtime** — deploiement rolling : un serveur a la fois, nginx bascule automatiquement
 - **Un seul script** — `setup.sh` fait tout (install, config, deploy, operations)
+- **100% configurable** — toutes les valeurs dans un `.env`
 
-## Fichiers
-
-```
-SERVER-TUNNING/
-├── setup.sh          # Script unique : menu interactif
-├── .env.example      # Template de configuration (a committer)
-├── .env              # Config locale (NE PAS committer)
-└── README.md
-```
-
-## Installation rapide
-
-### 1. Preparer la config
+## Quickstart
 
 ```bash
+# 1. Cloner
+git clone https://github.com/votre-org/server-tunning.git
+cd server-tunning
+
+# 2. Configurer
 cp .env.example .env
 nano .env
+
+# 3. Copier sur le serveur et lancer
+scp setup.sh .env user@votre-serveur:/tmp/
+ssh user@votre-serveur
+sudo bash /tmp/setup.sh --env /tmp/.env
 ```
 
-Variables a adapter :
-
-```env
-KYC_GIT_REPO=https://github.com/votre-org/ai-yas-kyc.git
-KYC_SERVER1=10.0.92.66
-KYC_SERVER2=10.0.92.67
-```
-
-### 2. Premiere installation (sur chaque serveur)
-
-```bash
-# Copier setup.sh et .env sur le serveur (via scp ou Segura)
-sudo bash setup.sh --env .env
-```
-
-Le menu s'affiche :
+Le menu interactif s'affiche :
 
 ```
   ╔══════════════════════════════════════════════════╗
-  ║         AI-YAS-KYC — Setup & Deploy             ║
+  ║         App — Setup & Deploy                    ║
   ╠══════════════════════════════════════════════════╣
-  ║  Serveur : 10.0.92.66                           ║
-  ║  App 1   : 10.0.92.66:8000                      ║
-  ║  App 2   : 10.0.92.67:8000                      ║
+  ║  Serveur : 192.168.1.10                         ║
+  ║  App 1   : 192.168.1.10:8000                    ║
+  ║  App 2   : 192.168.1.11:8000                    ║
   ╚══════════════════════════════════════════════════╝
 
   Etat du serveur :
-    ✗  OS Tuning
-    ✗  Python 3.9 + venv
-    ✗  Tesseract + OCRB
+    ✓  OS Tuning (sysctl, ulimits)
+    ✓  Python 3.9 + venv
     ✗  Code app
     ✗  Service systemd
 
@@ -81,7 +65,7 @@ Le menu s'affiche :
     3  Nginx Load Balancer
 
   ── Deploiement ──
-    4  Deploy
+    4  Deploy (git pull + restart)
 
   ── Operations ──
     5  Start    6  Stop    7  Restart
@@ -89,47 +73,57 @@ Le menu s'affiche :
     0  Quitter
 ```
 
-Executer dans l'ordre :
+## Installation
 
-| Etape | Serveur 1 (66) | Serveur 2 (67) |
-|-------|---------------|---------------|
-| OS Tuning | `1` | `1` |
-| Python + App | `2` | `2` |
-| Nginx LB | `3` | — |
-
-### 3. Deploiement (a chaque mise a jour)
-
-**Serveur 2 d'abord** (nginx bascule tout sur le serveur 1) :
+### Sur chaque serveur applicatif
 
 ```bash
-# Via Segura
-segura connect user@10.0.92.67
-sudo bash /opt/kyc/setup.sh --env /opt/kyc/.env
-# Menu → 4 (Deploy)
+sudo bash setup.sh --env .env
+# → 1 (OS Tuning)
+# → 2 (Python + App + Service)
 ```
 
-**Puis serveur 1** (nginx bascule tout sur le serveur 2 pendant le deploy) :
+### Sur le serveur Nginx (un seul)
 
 ```bash
-segura connect user@10.0.92.66
-sudo bash /opt/kyc/setup.sh --env /opt/kyc/.env
-# Menu → 4 (Deploy)
+sudo bash setup.sh --env .env
+# → 3 (Nginx Load Balancer)
 ```
 
-Le deploy fait :
+## Deploiement
+
+Deploiement rolling zero-downtime — un serveur a la fois :
+
+```bash
+# 1. Se connecter sur le serveur 2
+ssh user@serveur-2
+sudo bash setup.sh --env .env
+# → 4 (Deploy) — nginx bascule le trafic sur le serveur 1
+
+# 2. Se connecter sur le serveur 1
+ssh user@serveur-1
+sudo bash setup.sh --env .env
+# → 4 (Deploy) — nginx bascule le trafic sur le serveur 2
+
+# Resultat : zero downtime, les 2 serveurs sont a jour
+```
+
+Le deploy fait automatiquement :
 1. **Stop** le service (nginx bascule le trafic)
 2. **Git pull** (branch, tag, ou main)
 3. **Deps** mises a jour si `requirements.txt` a change
-4. **Modeles** verifies (ResNet18, RapidOCR)
-5. **Start** le service
-6. **Smoke test** (attend `/health`)
-7. Affiche le **rollback** si echec
+4. **Start** le service
+5. **Smoke test** (attend `/health`)
 
 ## Configuration .env
 
+```bash
+cp .env.example .env
+```
+
 | Variable | Defaut | Description |
 |----------|--------|-------------|
-| `KYC_GIT_REPO` | — | URL du repo git (obligatoire) |
+| `KYC_GIT_REPO` | — | URL du repo git de l'app |
 | `KYC_GIT_BRANCH` | `main` | Branche par defaut |
 | `KYC_APP_USER` | `kyc` | Utilisateur systeme |
 | `KYC_APP_DIR` | `/opt/kyc` | Dossier de l'application |
@@ -140,28 +134,10 @@ Le deploy fait :
 | `KYC_WORKERS` | `auto` | Workers gunicorn (`auto` = CPU/3) |
 | `KYC_TIMEOUT` | `120` | Timeout gunicorn (secondes) |
 | `KYC_MAX_REQUESTS` | `1000` | Recyclage workers (evite fuites memoire) |
-| `KYC_SERVER1` | `10.0.92.66` | IP serveur 1 (nginx + app) |
-| `KYC_SERVER2` | `10.0.92.67` | IP serveur 2 (app uniquement) |
-| `KYC_NGINX_SERVER` | `10.0.92.66` | IP du serveur nginx |
+| `KYC_SERVER1` | `192.168.1.10` | IP serveur 1 (nginx + app) |
+| `KYC_SERVER2` | `192.168.1.11` | IP serveur 2 (app) |
+| `KYC_NGINX_SERVER` | `192.168.1.10` | IP du serveur nginx |
 | `KYC_SWAP_SIZE` | `4G` | Taille swap de securite |
-
-## Operations courantes
-
-```bash
-# Lancer le menu
-sudo bash setup.sh --env .env
-
-# Commandes directes (sans menu)
-sudo systemctl start kyc
-sudo systemctl stop kyc
-sudo systemctl restart kyc
-sudo systemctl status kyc
-sudo journalctl -u kyc -f          # Logs live
-
-# Test
-curl http://127.0.0.1:8000/health  # Backend local
-curl http://10.0.92.66/health       # Via nginx LB
-```
 
 ## Tuning applique
 
@@ -169,60 +145,91 @@ curl http://10.0.92.66/health       # Via nginx LB
 
 | Parametre | Valeur | Pourquoi |
 |-----------|--------|----------|
-| `vm.swappiness` | 10 | Swap en dernier recours |
-| `vm.overcommit_memory` | 0 | Pas d'overcommit (PyTorch) |
-| `fs.file-max` | 2M | Beaucoup de fichiers ouverts |
-| `net.core.somaxconn` | 65535 | File d'attente connexions |
-| CPU governor | performance | Frequence max sur les 24 cores |
-| Swap | 4 GB | Securite OOM |
+| `vm.swappiness` | 10 | Swap en dernier recours uniquement |
+| `vm.overcommit_memory` | 0 | Refuse les allocations excessives (PyTorch) |
+| `fs.file-max` | 2M | Support de nombreux fichiers ouverts |
+| `net.core.somaxconn` | 65535 | File d'attente connexions elevee |
+| CPU governor | performance | Frequence CPU max permanente |
+| Swap | configurable | Securite OOM (evite les kills) |
+| ulimit nofile | 1M | Pas de limite fichiers ouverts |
 
 ### Gunicorn (option 2)
 
 | Parametre | Valeur | Pourquoi |
 |-----------|--------|----------|
-| Workers | CPU/3 = 8 | OCR CPU-bound, 3 threads/worker |
-| Timeout | 120s | Images complexes |
+| Workers | CPU/3 | OCR CPU-bound : 3 threads internes par worker |
+| Timeout | 120s | Traitements longs (images complexes) |
 | Max requests | 1000 | Recyclage anti-fuite memoire |
 | `OMP_NUM_THREADS` | 2 | Limite threads ONNX par worker |
-| `PYTORCH_NUM_THREADS` | 1 | Un document par worker |
+| `PYTORCH_NUM_THREADS` | 1 | Un document par worker, pas de parallelisme |
+| `ORT_NUM_THREADS` | 2 | Limite ONNX Runtime |
+
+### Pourquoi CPU/3 et pas CPU×2 ?
+
+```
+FAUX :  CPU×2 workers (ex: 48 pour 24 cores)
+  → 48 workers × 800 MB modeles = 38 GB > RAM disponible → OOM kill
+  → 48 workers × 3 threads = 144 threads → contention CPU severe
+
+VRAI :  CPU/3 workers (ex: 8 pour 24 cores)
+  → 8 workers × 800 MB = 6 GB RAM
+  → 8 workers × 3 threads = 24 threads = 100% CPU sans contention
+```
 
 ### Nginx (option 3)
 
 | Parametre | Valeur | Pourquoi |
 |-----------|--------|----------|
 | `least_conn` | — | Envoie vers le serveur le moins charge |
-| `proxy_read_timeout` | 120s | OCR peut prendre du temps |
-| `proxy_next_upstream` | 502/503/504 | Retry auto sur l'autre serveur |
+| `proxy_read_timeout` | 120s | Traitements longs |
+| `proxy_next_upstream` | 502/503/504 | Retry auto sur l'autre backend |
 | `max_fails` | 3 en 30s | Retire un backend defaillant |
 | `keepalive` | 32 | Connexions persistantes vers backends |
-| `client_max_body_size` | 20 MB | Upload images |
+| `client_max_body_size` | 20 MB | Upload fichiers |
+| `gzip` | on | Compression reponses JSON |
 
-## Performance
+## Operations
 
-| Metrique | Docker (ancien) | Bare-metal (actuel) |
-|----------|----------------|---------------------|
-| Workers total | 4 | **16** (8 × 2 serveurs) |
-| Overhead | 10-15% | **0%** |
-| Latence OCR | 2-3s | **1-2s** |
-| Requetes paralleles | 4 | **16** |
-| RAM utilisee | ~3 GB | ~6.4 GB / 32 GB |
-| Deploy downtime | 30-60s | **0s** (rolling) |
+```bash
+# Menu interactif
+sudo bash setup.sh --env .env
+
+# Commandes directes
+sudo systemctl start myapp
+sudo systemctl stop myapp
+sudo systemctl restart myapp
+sudo systemctl status myapp
+sudo journalctl -u myapp -f          # Logs live
+
+# Test
+curl http://127.0.0.1:8000/health    # Backend local
+curl http://serveur-nginx/health      # Via LB
+```
 
 ## Rollback
 
-Si un deploy echoue :
-
 ```bash
-cd /opt/kyc
+cd /opt/myapp
 git log --oneline -5              # Voir les commits
-git checkout <ancien-commit>      # Revenir
-sudo systemctl restart kyc        # Redemarrer
+git checkout <ancien-commit>      # Revenir en arriere
+sudo systemctl restart myapp      # Redemarrer
 ```
 
 ## Securite
 
-- Service tourne sous l'utilisateur `kyc` (pas root)
+- Service tourne sous un utilisateur dedie (pas root)
 - `ProtectSystem=full` dans systemd
 - `NoNewPrivileges=true`
 - Nginx : `server_tokens off`
-- Pas de donnees stockees (traitement en memoire)
+- `.env` dans `.gitignore` (jamais commite)
+
+## Prerequis
+
+- Ubuntu 22.04 ou 24.04
+- Acces root (sudo)
+- Git installe sur le serveur
+- Connexion internet (pour git clone + pip install)
+
+## License
+
+MIT
