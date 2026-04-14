@@ -77,11 +77,13 @@ GUNICORN_MAX_REQUESTS="${KYC_MAX_REQUESTS:-1000}"
 SWAP_SIZE="${KYC_SWAP_SIZE:-4G}"
 
 # Auto-calcul workers si "auto"
+# Strategie : CPU/2 workers × 2 threads/lib = CPU cores utilises efficacement
+# Pas de thread bomb (threads limites via OMP_NUM_THREADS=2)
 if [[ "$GUNICORN_WORKERS" == "auto" ]]; then
     CPU_COUNT=$(nproc)
-    GUNICORN_WORKERS=$((CPU_COUNT / 3))
+    GUNICORN_WORKERS=$((CPU_COUNT / 2))
     [[ $GUNICORN_WORKERS -lt 2 ]] && GUNICORN_WORKERS=2
-    [[ $GUNICORN_WORKERS -gt 12 ]] && GUNICORN_WORKERS=12
+    [[ $GUNICORN_WORKERS -gt 24 ]] && GUNICORN_WORKERS=24
 fi
 
 # Detecter le serveur actuel
@@ -375,9 +377,15 @@ User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR
 Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin"
+# Limiter strictement les threads de toutes les libs pour eviter le thread bomb
+# Chaque worker utilise 2 threads max par lib (12 workers × 2 = 24 cores)
 Environment="OMP_NUM_THREADS=2"
 Environment="MKL_NUM_THREADS=2"
+Environment="OPENBLAS_NUM_THREADS=2"
+Environment="BLIS_NUM_THREADS=2"
 Environment="ORT_NUM_THREADS=2"
+Environment="VECLIB_MAXIMUM_THREADS=2"
+Environment="NUMEXPR_NUM_THREADS=2"
 Environment="OMP_THREAD_LIMIT=2"
 
 ExecStart=$VENV_DIR/bin/gunicorn main:app \\
