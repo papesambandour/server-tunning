@@ -267,12 +267,31 @@ LIMITS
 }
 
 do_install_python() {
-    section "Installation Python + App"
+    section "Installation Python + App + Service systemd"
 
+    local skip_python_install=0
     if is_python_installed && is_ocrb_installed; then
         ok "Python + Tesseract OCRB deja installes"
-        read -p "  Reinstaller ? (o/N) " -n 1 -r; echo
-        [[ ! $REPLY =~ ^[Oo]$ ]] && return
+        read -p "  Reinstaller Python/OCRB ? (o/N) " -n 1 -r; echo
+        if [[ ! $REPLY =~ ^[Oo]$ ]]; then
+            skip_python_install=1
+            log "Saut de la reinstallation Python — verification du service systemd uniquement"
+        fi
+    fi
+
+    if [[ $skip_python_install -eq 1 ]]; then
+        # Verifier que le code est present, sinon le cloner
+        if [[ ! -d "$APP_DIR/.git" && -n "$GIT_REPO" ]]; then
+            log "Code absent dans $APP_DIR — clone du repo..."
+            [[ -d "$APP_DIR" ]] && rm -rf "$APP_DIR"
+            git clone -b "$GIT_BRANCH" "$GIT_REPO" "$APP_DIR"
+            chown -R $APP_USER:$APP_USER $APP_DIR
+            ok "Repo clone"
+        fi
+        # Toujours (re)installer le service systemd (idempotent)
+        do_install_service
+        ok "Installation terminee (service systemd verifie)"
+        return
     fi
 
     log "Installation des paquets systeme..."
