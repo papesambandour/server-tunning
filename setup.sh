@@ -582,19 +582,41 @@ do_deploy() {
 
     # Stop le service (nginx bascule sur l'autre serveur)
     log "Arret du service (nginx bascule le trafic sur l'autre serveur)..."
-    systemctl stop $SERVICE
+    if ! systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
+        fail "Service '$SERVICE' non installe — lancer d'abord l'option 3 (Python + App)"
+        return
+    fi
+    systemctl stop $SERVICE || warn "Service deja arrete ou non-existant"
     ok "Service arrete — trafic bascule sur l'autre serveur"
 
     # Git pull
     log "Git fetch + pull..."
-    cd $APP_DIR
-    git fetch --all --prune -q 2>/dev/null
+    cd $APP_DIR || { fail "Impossible de cd dans $APP_DIR"; return; }
+
+    # IMPORTANT : ne PAS rediriger stderr vers /dev/null — sinon les erreurs
+    # git (token manquant, conflit, branche inexistante) sont silencieuses
+    # et le script exit a cause de set -e.
+    if ! git fetch --all --prune; then
+        fail "git fetch a echoue (token GITHUB ? acces reseau ?) — service NON redemarre"
+        fail "Verifier : cd $APP_DIR && git fetch --all"
+        return
+    fi
 
     if [[ -n "${TAG_NAME:-}" ]]; then
-        git checkout "$TAG_NAME" -q 2>/dev/null
+        if ! git checkout "$TAG_NAME"; then
+            fail "git checkout du tag '$TAG_NAME' a echoue"
+            return
+        fi
     else
-        git checkout "$BRANCH" -q 2>/dev/null
-        git pull origin "$BRANCH" -q 2>/dev/null
+        if ! git checkout "$BRANCH"; then
+            fail "git checkout de la branche '$BRANCH' a echoue (verifier KYC_GIT_BRANCH dans .env)"
+            return
+        fi
+        if ! git pull origin "$BRANCH"; then
+            fail "git pull a echoue — modifications locales ou conflit ?"
+            fail "Diagnostic : cd $APP_DIR && git status && git pull origin $BRANCH"
+            return
+        fi
     fi
 
     NEW=$(git rev-parse --short HEAD)
