@@ -93,7 +93,7 @@ CURRENT_IP=$(hostname -I | awk '{print $1}')
 is_prereqs_installed()  { command -v git &>/dev/null && command -v curl &>/dev/null && command -v make &>/dev/null; }
 is_python_installed()   { [[ -f "$VENV_DIR/bin/python" ]]; }
 is_app_installed()      { [[ -f "$APP_DIR/main.py" ]]; }
-is_service_installed()  { systemctl list-unit-files | grep -q "$SERVICE.service"; }
+is_service_installed()  { [[ -f "/etc/systemd/system/${SERVICE}.service" ]] || systemctl cat "$SERVICE" &>/dev/null; }
 is_service_running()    { systemctl is-active --quiet $SERVICE 2>/dev/null; }
 is_nginx_installed()    { command -v nginx &>/dev/null; }
 is_nginx_configured()   { [[ -f /etc/nginx/conf.d/kyc.conf ]]; }
@@ -601,11 +601,14 @@ do_deploy() {
 
     # Stop le service (nginx bascule sur l'autre serveur)
     log "Arret du service (nginx bascule le trafic sur l'autre serveur)..."
-    if ! systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
+    # Verification robuste via le fichier unit (systemctl list-unit-files
+    # peut etre en cache ou avoir des patterns subtils).
+    if [[ ! -f "/etc/systemd/system/${SERVICE}.service" ]] \
+       && ! systemctl cat "$SERVICE" &>/dev/null; then
         fail "Service '$SERVICE' non installe — lancer d'abord l'option 3 (Python + App)"
         return
     fi
-    systemctl stop $SERVICE || warn "Service deja arrete ou non-existant"
+    systemctl stop "$SERVICE" || warn "Service deja arrete"
     ok "Service arrete — trafic bascule sur l'autre serveur"
 
     # Git pull
