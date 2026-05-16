@@ -593,12 +593,29 @@ do_deploy() {
     log "Git fetch + pull..."
     cd $APP_DIR || { fail "Impossible de cd dans $APP_DIR"; return; }
 
+    # Resync de l'URL remote depuis le .env — IMPORTANT pour la rotation de token.
+    # Si le PAT/token GitHub a change dans .env, le remote dans .git/config reste
+    # fige avec l'ancien token sans cette etape, et tous les git fetch echouent
+    # en boucle avec une erreur "fatal: Authentication failed".
+    if [[ -n "$GIT_REPO" ]]; then
+        CURRENT_REMOTE=$(git config --get remote.origin.url 2>/dev/null || echo "")
+        if [[ "$CURRENT_REMOTE" != "$GIT_REPO" ]]; then
+            log "Resync de l'URL remote depuis .env (rotation token detectee)..."
+            git remote set-url origin "$GIT_REPO" || {
+                fail "Impossible de mettre a jour l'URL remote"
+                return
+            }
+            ok "Remote URL synchronisee avec .env"
+        fi
+    fi
+
     # IMPORTANT : ne PAS rediriger stderr vers /dev/null — sinon les erreurs
     # git (token manquant, conflit, branche inexistante) sont silencieuses
     # et le script exit a cause de set -e.
     if ! git fetch --all --prune; then
         fail "git fetch a echoue (token GITHUB ? acces reseau ?) — service NON redemarre"
-        fail "Verifier : cd $APP_DIR && git fetch --all"
+        fail "Verifier : cd $APP_DIR && git remote -v && git fetch --all"
+        fail "Si rotation de token : nano /root/server-tunning/.env puis relancer option 5"
         return
     fi
 
