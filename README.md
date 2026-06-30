@@ -92,6 +92,48 @@ Le menu interactif s'affiche :
     0  Quitter
 ```
 
+## OS Tuning seul (standalone)
+
+Pour appliquer **uniquement** le tuning OS/reseau (sysctl, BBR, limites FD, swap, governor) sans installer Python/Nginx/l'app, utiliser le script dedie `os-tuning.sh`. Plus complet que l'option 2 de `setup.sh` : il ajoute le congestion control **BBR + qdisc `fq`**, `tcp_tw_reuse`, les buffers TCP, les limites **systemd** (les services ignorent `limits.conf`), un **backup** avant ecriture et un **rollback**.
+
+### Installer depuis GitHub et lancer (one-liner)
+
+```bash
+# Applique le tuning (action par defaut)
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/install-os-tuning.sh | sudo bash
+```
+
+Le bootstrap telecharge `os-tuning.sh` dans `~/server-tunning/`, le rend executable, puis l'execute.
+
+### Choisir l'action : apply / verify / rollback
+
+```bash
+# Verifier l'etat applique (ne modifie rien)
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/install-os-tuning.sh | sudo bash -s -- verify
+
+# Annuler le tuning (supprime les fichiers, swap/governor laisses intacts)
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/install-os-tuning.sh | sudo bash -s -- rollback
+```
+
+### Surcharger la configuration
+
+Les valeurs sont surchargeables par variables d'environnement (defauts : `SWAP_SIZE=4G`, `NOFILE_LIMIT=1048576`, `NPROC_LIMIT=256000`). Avec `sudo`, utiliser `-E` pour propager l'environnement :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/install-os-tuning.sh \
+  | SWAP_SIZE=8G NOFILE_LIMIT=2097152 sudo -E bash
+```
+
+### Sans bootstrap (telechargement manuel)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/os-tuning.sh -o os-tuning.sh
+chmod +x os-tuning.sh
+sudo ./os-tuning.sh apply      # ou verify | rollback
+```
+
+> **Important** : l'effet complet (nouvelles limites FD) necessite une **deconnexion/reconnexion** (sessions de login) et un `systemctl restart` des services concernes. Un reboot garantit tout.
+
 ## Installation
 
 ### Sur chaque serveur applicatif
