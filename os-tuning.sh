@@ -159,16 +159,23 @@ SYSTEMD
     ok "Limites systemd appliquees (daemon-reexec requis / reboot pour effet complet)"
 
     # --- 5. Swap safety net ---
+    # Toute la chaine est toleree : un swapon refuse (conteneur/VM sans
+    # privilege swap) ne doit PAS faire avorter le tuning sous 'set -e'.
     if ! swapon --show | grep -q .; then
         log "Creation swap $SWAP_SIZE..."
-        if fallocate -l "$SWAP_SIZE" /swap.img 2>/dev/null; then :; else
-            dd if=/dev/zero of=/swap.img bs=1M count=$(( ${SWAP_SIZE%G} * 1024 )) status=none
+        if fallocate -l "$SWAP_SIZE" /swap.img 2>/dev/null \
+           || dd if=/dev/zero of=/swap.img bs=1M count=$(( ${SWAP_SIZE%G} * 1024 )) status=none 2>/dev/null; then
+            chmod 600 /swap.img
+            if mkswap /swap.img > /dev/null 2>&1 && swapon /swap.img 2>/dev/null; then
+                grep -q "/swap.img" /etc/fstab || echo "/swap.img none swap sw 0 0" >> /etc/fstab
+                ok "Swap $SWAP_SIZE actif"
+            else
+                rm -f /swap.img
+                warn "Swap non active (swapon refuse) — tuning poursuivi"
+            fi
+        else
+            warn "Allocation du fichier swap impossible — etape ignoree"
         fi
-        chmod 600 /swap.img
-        mkswap /swap.img > /dev/null
-        swapon /swap.img
-        grep -q "/swap.img" /etc/fstab || echo "/swap.img none swap sw 0 0" >> /etc/fstab
-        ok "Swap $SWAP_SIZE actif"
     else
         ok "Swap deja present"
     fi
