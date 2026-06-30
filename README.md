@@ -20,7 +20,7 @@ Optimise pour les workloads **CPU-bound** : OCR (PaddleOCR, Tesseract, docTR), i
 ```
 
 - **Pas de Docker** — Python natif pour maximiser la performance CPU
-- **Workers = CPU / 3** — optimise pour les workloads CPU-bound (OCR, IA)
+- **Workers = CPU / 2** — optimise pour les workloads CPU-bound (OCR, IA)
 - **Zero downtime** — deploiement rolling : un serveur a la fois, nginx bascule automatiquement
 - **Un seul script** — `setup.sh` fait tout (install, config, deploy, operations)
 - **100% configurable** — toutes les valeurs dans un `.env`
@@ -193,7 +193,7 @@ cp .env.example .env
 | `KYC_PYTHON_VERSION` | `python3.9` | Version Python |
 | `KYC_BIND_HOST` | `0.0.0.0` | Adresse d'ecoute |
 | `KYC_BIND_PORT` | `8000` | Port de l'API |
-| `KYC_WORKERS` | `auto` | Workers gunicorn (`auto` = CPU/3) |
+| `KYC_WORKERS` | `auto` | Workers gunicorn (`auto` = CPU/2, borne [2, 24]) |
 | `KYC_TIMEOUT` | `120` | Timeout gunicorn (secondes) |
 | `KYC_MAX_REQUESTS` | `1000` | Recyclage workers (evite fuites memoire) |
 | `KYC_SERVER1` | `192.168.1.10` | IP serveur 1 (nginx + app) |
@@ -219,23 +219,23 @@ cp .env.example .env
 
 | Parametre | Valeur | Pourquoi |
 |-----------|--------|----------|
-| Workers | CPU/3 | OCR CPU-bound : 3 threads internes par worker |
+| Workers | CPU/2 | OCR CPU-bound : ~2 threads internes par worker |
 | Timeout | 120s | Traitements longs (images complexes) |
 | Max requests | 1000 | Recyclage anti-fuite memoire |
 | `OMP_NUM_THREADS` | 2 | Limite threads ONNX par worker |
 | `PYTORCH_NUM_THREADS` | 1 | Un document par worker, pas de parallelisme |
 | `ORT_NUM_THREADS` | 2 | Limite ONNX Runtime |
 
-### Pourquoi CPU/3 et pas CPU×2 ?
+### Pourquoi CPU/2 et pas CPU×2 ?
 
 ```
 FAUX :  CPU×2 workers (ex: 48 pour 24 cores)
   → 48 workers × 800 MB modeles = 38 GB > RAM disponible → OOM kill
-  → 48 workers × 3 threads = 144 threads → contention CPU severe
+  → 48 workers × ~3 threads = 144 threads → contention CPU severe
 
-VRAI :  CPU/3 workers (ex: 8 pour 24 cores)
-  → 8 workers × 800 MB = 6 GB RAM
-  → 8 workers × 3 threads = 24 threads = 100% CPU sans contention
+VRAI :  CPU/2 workers (ex: 12 pour 24 cores)
+  → 12 workers × 800 MB ≈ 10 GB RAM
+  → 12 workers × 2 threads (OMP_NUM_THREADS=2) = 24 threads = 100% CPU sans contention
 ```
 
 ### Nginx (option 3)
