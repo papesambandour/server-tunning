@@ -65,8 +65,14 @@ do_tuning() {
 
     if is_tuning_applied; then
         ok "Tuning deja applique ($SYSCTL_FILE existe)"
-        read -p "  Re-appliquer ? (o/N) " -n 1 -r; echo
-        [[ ! $REPLY =~ ^[Oo]$ ]] && return 0
+        # En mode pipe (curl ... | bash) stdin n'est pas un terminal : pas de
+        # prompt possible. On re-applique alors directement (ou si FORCE=1).
+        if [[ -t 0 && "${FORCE:-0}" != "1" ]]; then
+            read -p "  Re-appliquer ? (o/N) " -n 1 -r; echo
+            [[ ! $REPLY =~ ^[Oo]$ ]] && return 0
+        else
+            log "Mode non-interactif (pipe/FORCE=1) — re-application"
+        fi
     fi
 
     backup_file "$SYSCTL_FILE"

@@ -124,6 +124,25 @@ curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/maste
   | SWAP_SIZE=8G NOFILE_LIMIT=2097152 sudo -E bash
 ```
 
+### Lancer sans rien installer (pipe direct depuis GitHub)
+
+Pour executer le tuning **sans sauvegarder aucun fichier** dans `~/server-tunning/`, piper directement `os-tuning.sh` dans bash. Le script detecte le mode non-interactif (stdin = pipe) et n'attend aucune confirmation.
+
+```bash
+# Apply, rien n'est ecrit sur disque (hormis les fichiers de tuning eux-memes)
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/os-tuning.sh | sudo bash -s -- apply
+
+# verify / rollback
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/os-tuning.sh | sudo bash -s -- verify
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/os-tuning.sh | sudo bash -s -- rollback
+
+# Avec overrides d'env (propager avec sudo -E)
+curl -fsSL https://raw.githubusercontent.com/papesambandour/server-tunning/master/os-tuning.sh \
+  | SWAP_SIZE=8G sudo -E bash -s -- apply
+```
+
+> En execution interactive (fichier local), un `read -p` demande confirmation avant de re-appliquer. En mode pipe ce prompt est saute (re-application directe). Forcer la re-application en local : `FORCE=1 sudo ./os-tuning.sh apply`.
+
 ### Sans bootstrap (telechargement manuel)
 
 ```bash
