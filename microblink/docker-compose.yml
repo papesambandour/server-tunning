@@ -13,12 +13,22 @@
 services:
   # ── Moteur Microblink ──────────────────────────────────────
   api:
-    # Defaut 5.0 et NON 5.0.0 : Microblink a rate la publication de cette
-    # version. 5.0.0 n'est publie qu'en arm64 et 5.0.1 qu'en amd64 ; seul le
-    # tag 5.0 porte une vraie liste multi-arch (5.0.1 pour les deux).
-    # Avec 5.0.0, docker tire l'arm64 sur un serveur amd64 et le conteneur
-    # ne demarre pas ("container microblink-api-1 is unhealthy").
-    image: microblink/api:${MB_ENGINE_VERSION:-5.0}
+    # Epingle par DIGEST de liste de manifestes, pas par tag.
+    #
+    # Ce digest est celui du tag 5.0 (= 5.0.1), la seule reference 5.0.x que
+    # Microblink ait publiee pour les DEUX architectures : 5.0.0 n'existe qu'en
+    # arm64 et 5.0.1 qu'en amd64. Avec 5.0.0 le conteneur ne demarre pas sur un
+    # serveur amd64.
+    #
+    # C'est bien un digest de LISTE : docker y choisit encore amd64 ou arm64
+    # selon l'hote. Epingler le digest d'une architecture precise casserait
+    # l'autre.
+    #
+    # Le tag 5.0 bougera a la sortie de 5.0.2 ; ce digest, non.
+    #
+    # La variable porte la reference ENTIERE pour qu'un retour a un tag
+    # (MB_ENGINE_IMAGE=microblink/api:5.1.0) ne demande pas d'editer ce fichier.
+    image: ${MB_ENGINE_IMAGE:-microblink/api@sha256:3f24bc799ceec86b06e9395317e14e2b236c43f2c26ccc8cb0adffb32f85c5f5}
     env_file:
       - .env
     environment:
