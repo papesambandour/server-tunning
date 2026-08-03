@@ -947,7 +947,14 @@ do_deploy_microblink() {
     docker compose pull
 
     log "Redemarrage..."
-    docker compose up -d
+    # --force-recreate : sans lui, `up -d` REUTILISE un conteneur existant tant
+    # que la definition du service n'a pas change. Un conteneur cree pendant un
+    # incident (ex. moteur unhealthy -> "dependency failed to start") reste
+    # alors casse indefiniment, et chaque deploiement se contente de le
+    # redemarrer. Constate le 2026-08-03 sur .67 : boucle de SIGKILL a 1s dont
+    # on ne sortait que par un force-recreate manuel.
+    # Le cout est une recreation a chaque deploiement, absorbee par le LB.
+    docker compose up -d --force-recreate
 
     log "Attente des healthchecks..."
     for _ in $(seq 1 30); do
