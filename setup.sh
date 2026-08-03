@@ -648,6 +648,23 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header Connection "";
 
+        # Tracabilite de la repartition. Sans ces deux en-tetes, une bascule est
+        # INVISIBLE : si un noeud tombe, nginx rejoue sur l'autre et le client
+        # ne voit qu'un 200. Confortable pour l'appelant, aveuglant en exploitation.
+        #
+        #   X-Upstream-Addr:   10.0.92.67:9000                  -> servi par .67
+        #   X-Upstream-Addr:   10.0.92.67:9000, 10.0.92.66:9000 -> rejeu
+        #   X-Upstream-Status: 502, 200                         -> .67 KO, .66 a pris le relais
+        #
+        # 'always' est indispensable : sans lui add_header ne s'applique qu'aux
+        # statuts 2xx/3xx, donc pas aux 502/504 — exactement les cas qui comptent.
+        #
+        # Ces en-tetes exposent les IP internes. Sans consequence ici (port
+        # interne, appele par le cron), a retirer si ce LB devenait accessible
+        # depuis l'exterieur.
+        add_header X-Upstream-Addr   \$upstream_addr   always;
+        add_header X-Upstream-Status \$upstream_status always;
+
         # /v1/scan est un POST, donc non-idempotent au sens de nginx : sans
         # 'non_idempotent' il ne serait JAMAIS rejoue. Un scan est une fonction
         # pure (aucune ecriture, aucun effet de bord) : le rejeu est sur.
