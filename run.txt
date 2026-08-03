@@ -1,0 +1,22 @@
+
+bash /root/server-tunning/setup.sh --env /root/server-tunning/.env --mb-env /root/server-tunning/microblink/.env
+
+
+vi  /root/server-tunning/microblink/.env
+
+
+ Plan de ports
+
+  ┌──────┬──────────┬────────────────────────────────────────┐
+  │ Port │    Où    │                  Quoi                  │
+  ├──────┼──────────┼────────────────────────────────────────┤
+  │ 80   │ .66      │ LB nginx → API OCR Python (inchangé)   │
+  ├──────┼──────────┼────────────────────────────────────────┤
+  │ 8000 │ .66/.67  │ gunicorn Python (inchangé)             │
+  ├──────┼──────────┼────────────────────────────────────────┤
+  │ 9090 │ .66 seul │ LB nginx → Microblink                  │
+  ├──────┼──────────┼────────────────────────────────────────┤
+  │ 9000 │ .66/.67  │ façade Go — c'est ce que le LB appelle │
+  ├──────┼──────────┼────────────────────────────────────────┤
+  │ 9080 │ .66/.67  │ moteur Microblink (diagnostic)         │
+  └──────┴──────────┴────────────────────────────────────────┘

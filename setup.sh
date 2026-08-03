@@ -27,12 +27,30 @@ section() { echo -e "\n${CYAN}── $1 ──${NC}"; }
 # ── Charger le .env ──────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE=""
+MB_ENV_FILE=""
 
-# Parse --env argument
+# Parse des arguments
+#   --env     : config de deploiement (API OCR Python + chemins)
+#   --mb-env  : config runtime Microblink (licence, ports, versions)
+# Les deux sont separes car le second contient la licence de production et
+# ne vit pas forcement a cote du script.
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --env) ENV_FILE="$2"; shift 2 ;;
-        *)     shift ;;
+        --env)    ENV_FILE="$2";    shift 2 ;;
+        --mb-env) MB_ENV_FILE="$2"; shift 2 ;;
+        -h|--help)
+            cat <<USAGE
+Usage : sudo bash $0 [--env <fichier>] [--mb-env <fichier>]
+
+  --env      Config de deploiement (defaut : ./.env puis /etc/kyc.env)
+             Depot git, serveurs, chemins, tuning OS.
+
+  --mb-env   Config runtime Microblink (defaut : ./microblink/.env)
+             Licence, ports, versions d'images. Copie tel quel vers
+             \$KYC_MB_DIR/.env — les noms sont ceux du docker-compose.yml.
+USAGE
+            exit 0 ;;
+        *) shift ;;
     esac
 done
 
@@ -53,6 +71,15 @@ if [[ -n "$ENV_FILE" && -f "$ENV_FILE" ]]; then
 else
     warn "Pas de .env trouve — valeurs par defaut utilisees"
     warn "Creer un .env avec : cp .env.example .env && nano .env"
+fi
+
+# Chercher le .env Microblink : argument > microblink/.env > /etc/microblink.env
+if [[ -z "$MB_ENV_FILE" ]]; then
+    if [[ -f "$SCRIPT_DIR/microblink/.env" ]]; then
+        MB_ENV_FILE="$SCRIPT_DIR/microblink/.env"
+    elif [[ -f "/etc/microblink.env" ]]; then
+        MB_ENV_FILE="/etc/microblink.env"
+    fi
 fi
 
 # ── Config (valeurs du .env ou defauts) ──────────────────────
@@ -76,6 +103,21 @@ GUNICORN_MAX_REQUESTS="${KYC_MAX_REQUESTS:-1000}"
 
 SWAP_SIZE="${KYC_SWAP_SIZE:-4G}"
 
+# ── Microblink (moteur OCR de secours, stack Docker) ────────
+# Deploiement par IMAGE : le serveur n'a besoin ni du code Go ni de Docker Hub
+# prive. Seuls docker-compose.yml et .env sont necessaires.
+MB_DIR="${KYC_MB_DIR:-/opt/microblink}"
+# Ports lus depuis le .env runtime de Microblink (source unique).
+MB_API_PORT=$(grep -E '^API_HOST_PORT=' "$MB_ENV_FILE" 2>/dev/null | cut -d= -f2)
+MB_API_PORT="${MB_API_PORT:-9000}"
+MB_ENGINE_PORT=$(grep -E '^HOST_PORT=' "$MB_ENV_FILE" 2>/dev/null | cut -d= -f2)
+MB_ENGINE_PORT="${MB_ENGINE_PORT:-9080}"
+# Port du load balancer Microblink, sur $NGINX_SERVER uniquement. Distinct du
+# LB de l'API Python (port 80) : deux services differents, deux VIP.
+MB_LB_PORT="${KYC_MB_LB_PORT:-9090}"
+MB_COMPOSE_SRC="$SCRIPT_DIR/microblink/docker-compose.yml"
+MB_ENV_SRC="$MB_ENV_FILE"
+
 # Auto-calcul workers si "auto"
 # Strategie : CPU/2 workers × 2 threads/lib = CPU cores utilises efficacement
 # Pas de thread bomb (threads limites via OMP_NUM_THREADS=2)
@@ -97,9 +139,14 @@ is_service_installed()  { [[ -f "/etc/systemd/system/${SERVICE}.service" ]] || s
 is_service_running()    { systemctl is-active --quiet $SERVICE 2>/dev/null; }
 is_nginx_installed()    { command -v nginx &>/dev/null; }
 is_nginx_configured()   { [[ -f /etc/nginx/conf.d/kyc.conf ]]; }
+is_mb_lb_configured()   { [[ -f /etc/nginx/conf.d/microblink.conf ]]; }
 is_nginx_running()      { systemctl is-active --quiet nginx 2>/dev/null; }
 is_tuning_applied()     { [[ -f /etc/sysctl.d/99-perf.conf ]]; }
 is_ocrb_installed()     { tesseract --list-langs 2>&1 | grep -q ocrb 2>/dev/null; }
+is_docker_installed()   { command -v docker &>/dev/null && docker compose version &>/dev/null; }
+is_mb_installed()       { [[ -f "$MB_DIR/docker-compose.yml" ]]; }
+is_mb_configured()      { [[ -f "$MB_DIR/.env" ]] && grep -q '^LICENSE_KEY=.\+' "$MB_DIR/.env" 2>/dev/null; }
+is_mb_running()         { [[ -d "$MB_DIR" ]] && (cd "$MB_DIR" && docker compose ps --status running 2>/dev/null | grep -q ocr-api); }
 
 status_icon() {
     if $1; then echo -e "${GREEN}✓${NC}"; else echo -e "${RED}✗${NC}"; fi
@@ -140,10 +187,19 @@ show_status() {
         fi
     fi
 
+    if is_docker_installed || is_mb_installed; then
+        echo ""
+        echo -e "    $(status_icon is_docker_installed)  Docker + compose"
+        echo -e "    $(status_icon is_mb_installed)  Microblink ($MB_DIR)"
+        echo -e "    $(status_icon is_mb_configured)  Licence Microblink renseignee"
+        echo -e "    $(status_icon is_mb_running)  Stack Microblink active"
+    fi
+
     if [[ "$CURRENT_IP" == "$NGINX_SERVER" ]] || is_nginx_installed; then
         echo ""
         echo -e "    $(status_icon is_nginx_installed)  Nginx installe"
-        echo -e "    $(status_icon is_nginx_configured)  Nginx configure (LB)"
+        echo -e "    $(status_icon is_nginx_configured)  Nginx configure (LB API Python, :80)"
+        echo -e "    $(status_icon is_mb_lb_configured)  Nginx configure (LB Microblink, :$MB_LB_PORT)"
         echo -e "    $(status_icon is_nginx_running)  Nginx actif"
     fi
     echo ""
@@ -556,6 +612,68 @@ server {
 }
 EOF
 
+    # ── LB Microblink ──────────────────────────────────────────
+    # Service distinct de l'API Python : il ecoute sur son propre port plutot
+    # que de partager le vhost du port 80. Aucun risque de collision de routes,
+    # et on peut arreter l'un sans toucher a l'autre.
+    #
+    # client_max_body_size vient du bloc http global (20m) et couvre le
+    # MAX_UPLOAD_MB=20 de la facade Go.
+    cat > /etc/nginx/conf.d/microblink.conf <<EOF
+upstream microblink_backend {
+    # least_conn plutot que round-robin : la duree d'un scan OCR varie de 200 ms
+    # a plusieurs secondes selon le document, le round-robin enverrait des
+    # requetes a un noeud deja sature.
+    least_conn;
+    server $SERVER1:$MB_API_PORT max_fails=3 fail_timeout=30s;
+    server $SERVER2:$MB_API_PORT max_fails=3 fail_timeout=30s;
+    keepalive 32;
+}
+
+server {
+    listen $MB_LB_PORT;
+    server_name _;
+
+    location /nginx-health {
+        access_log off;
+        return 200 '{"status":"ok","service":"microblink-lb"}';
+        add_header Content-Type application/json;
+    }
+
+    location / {
+        proxy_pass http://microblink_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header Connection "";
+
+        # /v1/scan est un POST, donc non-idempotent au sens de nginx : sans
+        # 'non_idempotent' il ne serait JAMAIS rejoue. Un scan est une fonction
+        # pure (aucune ecriture, aucun effet de bord) : le rejeu est sur.
+        #
+        # 'timeout' est INDISPENSABLE ici. Un serveur eteint ou coupe du reseau
+        # n'emet pas de RST : il avale le SYN. nginx classe ca en 'timeout', pas
+        # en 'error'. Sans 'timeout' dans la liste, une requete sur deux part
+        # dans le vide et finit en 504 au lieu de basculer (constate en test).
+        proxy_next_upstream error timeout http_502 http_503 non_idempotent;
+        proxy_next_upstream_tries 2;
+        proxy_next_upstream_timeout 100s;
+
+        # Le vrai reglage est ici, pas dans la liste ci-dessus : c'est l'ecart
+        # entre les deux delais qui distingue "noeud mort" de "noeud charge".
+        #
+        # connect court  -> un noeud injoignable est ecarte en 3s.
+        # read long      -> un scan lent (gros document) a le temps de finir et
+        #                   ne declenche PAS de rejeu, donc pas de charge doublee.
+        # 90s laisse une marge au-dessus des 60s de REQUEST_TIMEOUT_S de la facade.
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+    }
+}
+EOF
+
     nginx -t 2>&1 || { fail "Config Nginx invalide"; return; }
     systemctl enable nginx -q
     systemctl restart nginx
@@ -744,6 +862,167 @@ print('OK')
 # OPERATIONS
 # ════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════
+# MICROBLINK (stack Docker)
+# ════════════════════════════════════════════════════════════
+
+do_install_docker() {
+    section "Docker + compose"
+
+    if is_docker_installed; then
+        ok "Docker deja installe ($(docker --version | cut -d' ' -f3 | tr -d ,))"
+        return
+    fi
+
+    log "Installation via le script officiel Docker..."
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable --now docker
+
+    if is_docker_installed; then
+        ok "Docker installe"
+    else
+        fail "Installation Docker incomplete (plugin compose absent ?)"
+    fi
+}
+
+do_install_microblink() {
+    section "Stack Microblink"
+
+    is_docker_installed || { fail "Docker requis — lance d'abord l'option d"; return; }
+
+    [[ -f "$MB_COMPOSE_SRC" ]] || { fail "Introuvable : $MB_COMPOSE_SRC"; return; }
+    if [[ -z "$MB_ENV_SRC" || ! -f "$MB_ENV_SRC" ]]; then
+        fail "Config Microblink introuvable${MB_ENV_SRC:+ : $MB_ENV_SRC}"
+        echo -e "  Cherche dans l'ordre : --mb-env, ./microblink/.env, /etc/microblink.env"
+        echo -e "  Creer depuis le gabarit :"
+        echo -e "    cp $SCRIPT_DIR/microblink/.env.example $SCRIPT_DIR/microblink/.env"
+        echo -e "    vi $SCRIPT_DIR/microblink/.env    # LICENSEE + LICENSE_KEY"
+        return
+    fi
+
+    # La licence ne peut pas etre devinee : elle vient de Microblink.
+    if ! grep -qE '^LICENSE_KEY=.+' "$MB_ENV_SRC"; then
+        fail "LICENSE_KEY vide dans $MB_ENV_SRC"
+        echo -e "  Sans licence valide le moteur demarre mais refuse toute reconnaissance."
+        return
+    fi
+
+    log "Config Microblink : $MB_ENV_SRC"
+    mkdir -p "$MB_DIR"
+    cp "$MB_COMPOSE_SRC" "$MB_DIR/docker-compose.yml"
+    cp "$MB_ENV_SRC"     "$MB_DIR/.env"
+    chmod 600 "$MB_DIR/.env"
+    ok "docker-compose.yml et .env copies dans $MB_DIR"
+
+    ok "Stack prete — lance l'option m pour deployer"
+}
+
+do_deploy_microblink() {
+    section "Deploiement Microblink"
+
+    is_mb_installed  || { fail "Stack absente — lance d'abord l'option D"; return; }
+    is_mb_configured || { fail "Licence absente dans $MB_DIR/.env"; return; }
+
+    CUR_VER=$(grep -E '^API_VERSION=' "$MB_DIR/.env" 2>/dev/null | cut -d= -f2)
+    echo -e "  Serveur   : $CURRENT_IP"
+    echo -e "  Repertoire: $MB_DIR"
+    echo -e "  Version    : ${CUR_VER:-<non definie>}"
+    echo ""
+
+    read -p "  Nouvelle version (Entree = garder ${CUR_VER:-latest}) : " NEW_VER
+    if [[ -n "$NEW_VER" ]]; then
+        if grep -q '^API_VERSION=' "$MB_DIR/.env"; then
+            sed -i "s/^API_VERSION=.*/API_VERSION=$NEW_VER/" "$MB_DIR/.env"
+        else
+            echo "API_VERSION=$NEW_VER" >> "$MB_DIR/.env"
+        fi
+        ok "API_VERSION -> $NEW_VER"
+    fi
+
+    read -p "  Confirmer le deploiement ? (o/N) " -n 1 -r; echo
+    [[ ! $REPLY =~ ^[Oo]$ ]] && return
+
+    cd "$MB_DIR"
+    log "Recuperation des images..."
+    docker compose pull
+
+    log "Redemarrage..."
+    docker compose up -d
+
+    log "Attente des healthchecks..."
+    for _ in $(seq 1 30); do
+        sleep 3
+        MB_H=$(docker compose ps --format '{{.Service}}:{{.Health}}' 2>/dev/null | tr '\n' ' ')
+        [[ "$MB_H" == *"api:healthy"* && "$MB_H" == *"ocr-api:healthy"* ]] && break
+    done
+
+    echo ""
+    docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Ports}}"
+    echo ""
+    do_test_microblink
+}
+
+do_test_microblink() {
+    section "Test Microblink"
+
+    # /health ne suffit PAS : lors d'une panne de licence il reste au vert alors
+    # que toute reconnaissance echoue. On teste donc les deux.
+    printf "  /health facade      : "
+    curl -s -m 5 "http://127.0.0.1:$MB_API_PORT/health" \
+        | grep -q '"status":"UP"' && echo -e "${GREEN}UP${NC}" || echo -e "${RED}DOWN${NC}"
+
+    printf "  moteur Microblink   : "
+    curl -s -m 5 "http://127.0.0.1:$MB_ENGINE_PORT/health" \
+        | grep -q '"worker_readiness":{"name":"self-hosted","status":"UP"' \
+        && echo -e "${GREEN}UP${NC}" || echo -e "${RED}DOWN${NC}"
+
+    printf "  erreurs de licence  : "
+    MB_ERR=$(cd "$MB_DIR" && docker compose logs api 2>&1 \
+        | grep -cE "License hasn't been confirmed|Couldn't submit server permission" || true)
+    if [[ "${MB_ERR:-0}" -gt 0 ]]; then
+        echo -e "${RED}$MB_ERR${NC}  -> reconnaissance HS, redemarrer (option M)"
+    else
+        echo -e "${GREEN}aucune${NC}"
+    fi
+
+    # Le LB n'existe que sur le serveur principal.
+    if is_mb_lb_configured; then
+        printf "  LB nginx (:%s)    : " "$MB_LB_PORT"
+        curl -s -m 5 "http://127.0.0.1:$MB_LB_PORT/nginx-health" \
+            | grep -q '"service":"microblink-lb"' \
+            && echo -e "${GREEN}UP${NC}" || echo -e "${RED}DOWN${NC}"
+
+        # Un noeud mort est invisible depuis /nginx-health : nginx repond meme
+        # si les deux backends sont tombes. On interroge donc chaque noeud.
+        for s in "$SERVER1" "$SERVER2"; do
+            printf "  noeud %-14s: " "$s"
+            curl -s -m 5 "http://$s:$MB_API_PORT/health" \
+                | grep -q '"status":"UP"' && echo -e "${GREEN}UP${NC}" || echo -e "${RED}DOWN${NC}"
+        done
+    fi
+
+    echo ""
+    warn "Un vrai scan reste le seul controle fiable :"
+    echo -e "    curl -X POST http://127.0.0.1:$MB_API_PORT/v1/scan -F \"file=@doc.jpg\""
+    # if, et non `cmd && echo` : sous `set -e` un && faux en DERNIERE commande
+    # ferait remonter un code 1 et sortir du script sur les noeuds sans LB.
+    if is_mb_lb_configured; then
+        echo -e "    curl -X POST http://$NGINX_SERVER:$MB_LB_PORT/v1/scan -F \"file=@doc.jpg\"   # via LB"
+    fi
+}
+
+do_restart_microblink() {
+    is_mb_installed || { fail "Stack absente"; return; }
+    section "Redemarrage Microblink"
+    cd "$MB_DIR" && docker compose up -d --force-recreate
+    ok "Stack redemarree"
+}
+
+do_logs_microblink() {
+    is_mb_installed || { fail "Stack absente"; return; }
+    cd "$MB_DIR" && docker compose logs -f --tail=100
+}
+
 do_start()   { systemctl start $SERVICE && ok "Service demarre"; }
 do_stop()    { systemctl stop $SERVICE && ok "Service arrete"; }
 do_restart() { systemctl restart $SERVICE && ok "Service redemarre"; }
@@ -785,8 +1064,13 @@ while true; do
     echo -e "    ${CYAN}3${NC}  Python + App + Service systemd"
     echo -e "    ${CYAN}4${NC}  Nginx Load Balancer (serveur LB uniquement)"
     echo ""
+    echo -e "  ${BOLD}── Microblink (OCR de secours, Docker) ──${NC}"
+    echo -e "    ${CYAN}d${NC}  Docker + compose"
+    echo -e "    ${CYAN}D${NC}  Installer la stack Microblink"
+    echo ""
     echo -e "  ${BOLD}── Deploiement ──${NC}"
-    echo -e "    ${CYAN}5${NC}  Deploy (git pull + restart)"
+    echo -e "    ${CYAN}5${NC}  Deploy API OCR Python (git pull + restart)"
+    echo -e "    ${CYAN}m${NC}  Deploy Microblink (pull image + up)"
     echo ""
     echo -e "  ${BOLD}── Operations ──${NC}"
     echo -e "    ${CYAN}6${NC}  Start service"
@@ -794,6 +1078,9 @@ while true; do
     echo -e "    ${CYAN}8${NC}  Restart service"
     echo -e "    ${CYAN}9${NC}  Logs (live)"
     echo -e "    ${CYAN}t${NC}  Test tous les backends"
+    echo -e "    ${CYAN}M${NC}  Restart Microblink"
+    echo -e "    ${CYAN}L${NC}  Logs Microblink"
+    echo -e "    ${CYAN}T${NC}  Test Microblink"
     echo ""
     echo -e "    ${CYAN}0${NC}  Quitter"
     echo ""
@@ -811,7 +1098,13 @@ while true; do
         7) do_stop ;;
         8) do_restart ;;
         9) do_logs ;;
-        t|T) do_test ;;
+        t) do_test ;;
+        d) do_install_docker ;;
+        D) do_install_microblink ;;
+        m) do_deploy_microblink ;;
+        M) do_restart_microblink ;;
+        L) do_logs_microblink ;;
+        T) do_test_microblink ;;
         0) echo -e "${GREEN}Bye.${NC}"; exit 0 ;;
         *) warn "Choix invalide" ;;
     esac

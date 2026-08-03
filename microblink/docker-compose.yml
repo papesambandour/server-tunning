@@ -1,0 +1,91 @@
+# ============================================================
+# Microblink BlinkID self-hosted — stack de PRODUCTION
+# ============================================================
+# Deploye par setup.sh (options D puis m) dans $KYC_MB_DIR (/opt/microblink).
+#
+# Deploiement par IMAGE : aucun code source n'est necessaire sur le serveur.
+# Les deux images viennent de Docker Hub.
+#
+# Le fichier .env voisin est GENERE par setup.sh depuis les variables KYC_MB_*
+# du .env de deploiement. Ne pas l'editer a la main : il serait ecrase.
+# ============================================================
+
+services:
+  # ── Moteur Microblink ──────────────────────────────────────
+  api:
+    image: microblink/api:${MB_ENGINE_VERSION:-5.0.0}
+    env_file:
+      - .env
+    environment:
+      # PORT est le port INTERNE au conteneur (HOST_PORT est celui de l'hote).
+      PORT: ${PORT:-9080}
+
+      # Resilience de la verification de licence.
+      #
+      # Defauts embarques dans l'image (application.yml du binaire) :
+      #   sdkLock.serverCallWaitingTimeoutMs: 1000   -> 1 seule seconde
+      #   sdkLock.baltazar.client.retryAttempts: 1   -> 1 seule tentative
+      #   sdkLock.baltazar.client.retryInterval: 3s
+      #
+      # Contrairement a `ping.client`, `sdk-lock` n'a PAS de `retry-schedule` :
+      # une fois les tentatives epuisees le SDK abandonne DEFINITIVEMENT et
+      # toute reconnaissance renvoie "Invalid wrapper input" jusqu'au
+      # redemarrage du conteneur. Une coupure Internet de quelques secondes
+      # suffit a mettre le service hors service (constate le 2026-07-29).
+      #
+      # Ces proprietes ne sont pas exposees par /entrypoint.sh : elles passent
+      # obligatoirement par JAVA_OPTS (variable officiellement documentee).
+      JAVA_OPTS: >-
+        -Dmicroblink.sdk-lock.baltazar.client.retry-attempts=${LICENCE_RETRY_ATTEMPTS:-10}
+        -Dmicroblink.sdk-lock.baltazar.client.retry-interval=${LICENCE_RETRY_INTERVAL:-30s}
+        -Dmicroblink.sdk-lock.server-call-waiting-timeout-ms=${LICENCE_CALL_TIMEOUT_MS:-15000}
+    restart: unless-stopped
+    volumes:
+      # Ces deux montages ne sont PAS de la telemetrie optionnelle : la licence
+      # identifie la machine par machine-id. Sans eux le ping echoue et la
+      # reconnaissance s'arrete. (Sur Linux les deux chemins existent.)
+      - /etc/machine-id:/etc/machine-id:ro
+      - /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
+    ports:
+      - "${HOST_PORT:-9080}:${PORT:-9080}"
+    healthcheck:
+      # L'image ne contient ni curl ni wget -> /dev/tcp de bash.
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/${PORT:-9080}; printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; grep -q ''"status":"UP"'' <&3'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ── Facade Go (format standard SENTINEL-KYC) ───────────────
+  ocr-api:
+    # Pas de section `build` ici, contrairement au depot de developpement :
+    # en production on deploie strictement l'image publiee.
+    image: digitalpi/sentinel-micro-blink-ocr-api:${API_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      # Reseau interne du compose : nom de service + port INTERNE.
+      MICROBLINK_URL: http://api:${PORT:-9080}
+      MICROBLINK_USER: ${BASIC_AUTH_USERNAME:-}
+      MICROBLINK_PASS: ${BASIC_AUTH_PASSWORD:-}
+      API_PORT: "8000"
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
+      DEFAULT_AGE_LIMIT: ${DEFAULT_AGE_LIMIT:-18}
+      REQUEST_TIMEOUT_S: ${REQUEST_TIMEOUT_S:-60}
+      CONVERT_TARGET: ${CONVERT_TARGET:-jpeg}
+      CONVERT_QUALITY: ${CONVERT_QUALITY:-95}
+      CROPPED_RETRY: ${CROPPED_RETRY:-true}
+    ports:
+      - "${API_HOST_PORT:-9000}:8000"
+    depends_on:
+      api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

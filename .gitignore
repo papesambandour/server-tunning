@@ -3,9 +3,15 @@
 *.iml
 out/
 
-# Config locale (contient les IPs, mots de passe)
-.env
-.env.prod
+# Config locale (IPs, mots de passe, jeton GitHub).
+# Meme motif large qu'en dessous : .env.bak / .env.66 / .env-blank sont
+# aussi dangereux que .env lui-meme, et ce depot est PUBLIC.
+.env*
 !.env.example
 benchmark.sh
 BENCHMARK.md
+# Config runtime Microblink (contient la licence de prod).
+# Motif LARGE puis exception : `microblink/.env` seul ne couvrait pas
+# `.env-blank`, `.env.bak`, `.env.66`... et ce depot est PUBLIC.
+microblink/.env*
+!microblink/.env.example
