@@ -16,6 +16,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 log()     { echo -e "${BLUE}[INFO]${NC}  $1"; }
@@ -504,6 +505,25 @@ EOF
 
 do_install_nginx() {
     section "Installation Nginx (Load Balancer)"
+
+    # Garde-fou : le LB ne vit que sur UN serveur.
+    #
+    # La ligne du menu annonce "serveur LB uniquement" mais ne l'imposait pas :
+    # taper 4 sur un noeud secondaire y installait un nginx pour rien. Constate
+    # le 2026-08-03 sur 10.0.92.67, qui s'est retrouve avec la page d'accueil
+    # Ubuntu exposee sur le port 80 et un service de plus a maintenir. Sans
+    # consequence fonctionnelle, mais ca brouille le diagnostic : on croit
+    # avoir deux LB alors qu'un seul est configure.
+    if [[ "$CURRENT_IP" != "$NGINX_SERVER" ]]; then
+        fail "Ce serveur n'est pas le serveur LB"
+        echo -e "  IP de cette machine : $CURRENT_IP"
+        echo -e "  Serveur LB declare  : $NGINX_SERVER"
+        echo ""
+        echo -e "  Le load balancer ne s'installe que sur $NGINX_SERVER."
+        echo -e "  Pour le deplacer, changer KYC_NGINX_SERVER dans le .env de deploiement"
+        echo -e "  plutot que de forcer ici."
+        return
+    fi
 
     if is_nginx_configured; then
         ok "Nginx deja configure"
@@ -1086,7 +1106,13 @@ while true; do
     echo -e "    ${CYAN}1${NC}  Prerequis (git, curl, build-essential, htop, jq...)"
     echo -e "    ${CYAN}2${NC}  OS Tuning (kernel, swap, CPU governor)"
     echo -e "    ${CYAN}3${NC}  Python + App + Service systemd"
-    echo -e "    ${CYAN}4${NC}  Nginx Load Balancer (serveur LB uniquement)"
+    # En clair sur le serveur LB, grisee ailleurs : une option qu'on ne peut pas
+    # choisir ne doit pas ressembler a une option qu'on peut choisir.
+    if [[ "$CURRENT_IP" == "$NGINX_SERVER" ]]; then
+        echo -e "    ${CYAN}4${NC}  Nginx Load Balancer"
+    else
+        echo -e "    ${DIM}4  Nginx Load Balancer — indisponible, le LB est sur $NGINX_SERVER${NC}"
+    fi
     echo ""
     echo -e "  ${BOLD}── Microblink (OCR de secours, Docker) ──${NC}"
     echo -e "    ${CYAN}d${NC}  Docker + compose"
