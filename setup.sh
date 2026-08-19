@@ -896,7 +896,7 @@ print('OK')
     fi
 
     # Health check
-    HEALTH=$(curl -s --max-time 5 http://127.0.0.1:$BIND_PORT/health)
+    HEALTH=$(curl -s --max-time 5 "http://127.0.0.1:$BIND_PORT/health" 2>/dev/null || true)
     VERSION=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null || echo "?")
 
     DEPLOY_END=$(date +%s)
@@ -1088,8 +1088,13 @@ do_test_microblink() {
     printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAABd0lEQVR42u3SMQ0AAAzDsPLH2GdMRmLHDktGECXtwLlIgLEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSyMpQLGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWBhLBYyFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjMU3CwnZ+fxhteCBAAAAAElFTkSuQmCC' | base64 -d > /tmp/mb-test.png 2>/dev/null
 
     printf "  scan reel           : "
+    # `|| true` INDISPENSABLE : sous `set -euo pipefail`, une affectation
+    # VAR=$(cmd) dont la commande echoue fait SORTIR le script. Constate le
+    # 2026-08-19 sur 10.0.92.67, facade injoignable : le menu s'arretait net sur
+    # "scan reel :" sans rien afficher, et rendait la main au shell.
+    # Ici l'echec de curl est un RESULTAT attendu, pas une erreur de script.
     MB_SCAN=$(curl -s -m 60 -X POST "http://127.0.0.1:$MB_API_PORT/v1/scan" \
-                   -F "file=@/tmp/mb-test.png" 2>/dev/null)
+                   -F "file=@/tmp/mb-test.png" 2>/dev/null || true)
     rm -f /tmp/mb-test.png
 
     if echo "$MB_SCAN" | grep -q 'STRUCT_NOT_AN_ID_CARD'; then
@@ -1134,7 +1139,7 @@ do_logs()    { journalctl -u $SERVICE -f --no-pager; }
 do_test() {
     section "Test des backends"
     for SERVER in $SERVER1 $SERVER2; do
-        HEALTH=$(curl -s --max-time 5 http://$SERVER:$BIND_PORT/health 2>/dev/null)
+        HEALTH=$(curl -s --max-time 5 "http://$SERVER:$BIND_PORT/health" 2>/dev/null || true)
         if echo "$HEALTH" | grep -q '"status"'; then
             VERSION=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null)
             ok "$SERVER → v$VERSION"
@@ -1143,7 +1148,7 @@ do_test() {
         fi
     done
     if is_nginx_running; then
-        HEALTH=$(curl -s --max-time 5 http://$NGINX_SERVER/health 2>/dev/null)
+        HEALTH=$(curl -s --max-time 5 "http://$NGINX_SERVER/health" 2>/dev/null || true)
         if echo "$HEALTH" | grep -q '"status"'; then
             ok "Nginx LB → OK (via $NGINX_SERVER)"
         else
