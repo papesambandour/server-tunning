@@ -693,7 +693,14 @@ server {
         # n'emet pas de RST : il avale le SYN. nginx classe ca en 'timeout', pas
         # en 'error'. Sans 'timeout' dans la liste, une requete sur deux part
         # dans le vide et finit en 504 au lieu de basculer (constate en test).
-        proxy_next_upstream error timeout http_502 http_503 non_idempotent;
+        # PAS de http_503 ici. Le seul 503 de la facade est LICENCE_REFUSED,
+        # une reponse APPLICATIVE : la licence etant la meme sur les deux noeuds,
+        # l'autre repondra exactement pareil. Le rejeu est inutile, il consomme
+        # le compteur max_fails et transforme un 503 explicite en 502 opaque —
+        # le client perd le code d'erreur et recoit du HTML nginx.
+        # Constate le 2026-08-19 : X-Upstream-Status: 503, 502.
+        # On ne bascule que sur ce qui prouve un noeud casse.
+        proxy_next_upstream error timeout http_502 non_idempotent;
         proxy_next_upstream_tries 2;
         proxy_next_upstream_timeout 100s;
 
