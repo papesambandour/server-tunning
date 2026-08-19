@@ -135,6 +135,13 @@ services:
       # descendre a 300 s. Les pannes observees sont survenues apres des dizaines
       # de minutes d'inactivite, donc 900 s reste largement sous le seuil connu.
       KEEPALIVE_INTERVAL: ${KEEPALIVE_INTERVAL:-900}
+      # 1 = une ligne par ping. A reserver au diagnostic : a 900 s cela fait
+      # 96 lignes/jour, ce qui noie les anomalies.
+      KEEPALIVE_VERBOSE: ${KEEPALIVE_VERBOSE:-0}
+      # Bilan periodique, en nombre de pings. C'est la PREUVE DE VIE du service :
+      # sans elle, un keepalive silencieux est indiscernable d'un keepalive mort.
+      # 24 pings a 900 s = un bilan toutes les 6 h.
+      KEEPALIVE_SUMMARY_EVERY: ${KEEPALIVE_SUMMARY_EVERY:-24}
       KEEPALIVE_URL: http://ocr-api:8000/v1/scan
     entrypoint:
       - /bin/sh
@@ -153,15 +160,23 @@ services:
         # Laisse le temps a ocr-api de repondre : depends_on ne garantit que le
         # demarrage du conteneur, pas que le serveur HTTP ecoute deja.
         sleep 15
+        n=0; ok=0; ko=0
         while true; do
           body=$(curl -s -m 60 -w '\n%{http_code}' -X POST "$$KEEPALIVE_URL" -F "file=@/tmp/ping.png" 2>/dev/null || true)
           code=$(printf '%s' "$$body" | tail -n1)
+          n=$((n+1))
           case "$$code" in
-            200) : ;;  # nominal : on ne log rien, sinon le fichier de log explose
-            503) echo "$(date -u +%FT%TZ) LICENCE PERDUE — le moteur ne reviendra pas seul, redemarrer le conteneur api" ;;
-            "")  echo "$(date -u +%FT%TZ) facade injoignable" ;;
-            *)   echo "$(date -u +%FT%TZ) reponse inattendue: HTTP $$code" ;;
+            200) ok=$((ok+1))
+                 [ "$${KEEPALIVE_VERBOSE:-0}" = "1" ] && echo "$(date -u +%FT%TZ) ping OK" || true ;;
+            503) ko=$((ko+1)); echo "$(date -u +%FT%TZ) LICENCE PERDUE — le moteur ne reviendra pas seul, redemarrer le conteneur api" ;;
+            ""|000) ko=$((ko+1)); echo "$(date -u +%FT%TZ) facade injoignable" ;;
+            *)   ko=$((ko+1)); echo "$(date -u +%FT%TZ) reponse inattendue: HTTP $$code" ;;
           esac
+          # Bilan periodique : sans lui, un service muet ne se distingue pas d'un
+          # service mort. C'est la seule trace en fonctionnement nominal.
+          if [ "$${KEEPALIVE_SUMMARY_EVERY:-24}" -gt 0 ] && [ $((n % $${KEEPALIVE_SUMMARY_EVERY:-24})) -eq 0 ]; then
+            echo "$(date -u +%FT%TZ) bilan: $$n pings, $$ok ok, $$ko echecs, intervalle $${KEEPALIVE_INTERVAL}s"
+          fi
           sleep "$$KEEPALIVE_INTERVAL"
         done
     logging:
