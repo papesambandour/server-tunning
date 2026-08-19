@@ -122,6 +122,20 @@ services:
   keepalive:
     image: curlimages/curl:8.11.1
     restart: unless-stopped
+    # root : le repertoire ./logs est cree par Docker en root:root au premier
+    # demarrage. L'image curlimages tourne en uid 100 et ne pourrait pas y ecrire.
+    # Le conteneur ne fait qu'une boucle curl, la surface est minime.
+    user: "0:0"
+    volumes:
+      # Chemin RELATIF au docker-compose.yml : ./logs a cote du compose, donc
+      # /opt/microblink/logs en production.
+      #
+      # Les logs Docker (json-file) vivent dans /var/lib/docker/containers/<id>/
+      # et sont DETRUITS avec le conteneur. Or l'option M du menu fait
+      # `up -d --force-recreate` : l'historique de la panne disparait au moment
+      # meme ou on la repare. Mesure le 2026-08-19 : 84 lignes avant, 2 apres.
+      # Ce fichier-ci survit.
+      - ./logs:/var/log/microblink
     depends_on:
       ocr-api:
         condition: service_started
@@ -143,6 +157,9 @@ services:
       # 24 pings a 900 s = un bilan toutes les 6 h.
       KEEPALIVE_SUMMARY_EVERY: ${KEEPALIVE_SUMMARY_EVERY:-24}
       KEEPALIVE_URL: http://ocr-api:8000/v1/scan
+      # Taille max du fichier avant rotation, en Ko. On garde les 500 dernieres
+      # lignes : un fichier qui grossit sans limite est pire que pas de fichier.
+      KEEPALIVE_LOG_MAX_KB: ${KEEPALIVE_LOG_MAX_KB:-512}
     entrypoint:
       - /bin/sh
       - -c
@@ -156,7 +173,11 @@ services:
         fi
         printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAABd0lEQVR42u3SMQ0AAAzDsPLH2GdMRmLHDktGECXtwLlIgLEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSyMpQLGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWBhLBYyFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjMU3CwnZ+fxhteCBAAAAAElFTkSuQmCC' \
           | base64 -d > /tmp/ping.png
-        echo "keepalive demarre — un scan toutes les $${KEEPALIVE_INTERVAL}s vers $${KEEPALIVE_URL}"
+        LOG=/var/log/microblink/keepalive.log
+        # Tout passe par say() : stdout pour `docker compose logs`, fichier pour
+        # l'historique qui survit aux recreations de conteneur.
+        say() { echo "$$1"; echo "$$1" >> "$$LOG" 2>/dev/null || true; }
+        say "$(date -u +%FT%TZ) keepalive demarre — un scan toutes les $${KEEPALIVE_INTERVAL}s vers $${KEEPALIVE_URL}"
         # Laisse le temps a ocr-api de repondre : depends_on ne garantit que le
         # demarrage du conteneur, pas que le serveur HTTP ecoute deja.
         sleep 15
@@ -167,15 +188,20 @@ services:
           n=$((n+1))
           case "$$code" in
             200) ok=$((ok+1))
-                 [ "$${KEEPALIVE_VERBOSE:-0}" = "1" ] && echo "$(date -u +%FT%TZ) ping OK" || true ;;
-            503) ko=$((ko+1)); echo "$(date -u +%FT%TZ) LICENCE PERDUE — le moteur ne reviendra pas seul, redemarrer le conteneur api" ;;
-            ""|000) ko=$((ko+1)); echo "$(date -u +%FT%TZ) facade injoignable" ;;
-            *)   ko=$((ko+1)); echo "$(date -u +%FT%TZ) reponse inattendue: HTTP $$code" ;;
+                 [ "$${KEEPALIVE_VERBOSE:-0}" = "1" ] && say "$(date -u +%FT%TZ) ping OK" || true ;;
+            503) ko=$((ko+1)); say "$(date -u +%FT%TZ) LICENCE PERDUE — le moteur ne reviendra pas seul, redemarrer le conteneur api" ;;
+            ""|000) ko=$((ko+1)); say "$(date -u +%FT%TZ) facade injoignable" ;;
+            *)   ko=$((ko+1)); say "$(date -u +%FT%TZ) reponse inattendue: HTTP $$code" ;;
           esac
           # Bilan periodique : sans lui, un service muet ne se distingue pas d'un
           # service mort. C'est la seule trace en fonctionnement nominal.
           if [ "$${KEEPALIVE_SUMMARY_EVERY:-24}" -gt 0 ] && [ $((n % $${KEEPALIVE_SUMMARY_EVERY:-24})) -eq 0 ]; then
-            echo "$(date -u +%FT%TZ) bilan: $$n pings, $$ok ok, $$ko echecs, intervalle $${KEEPALIVE_INTERVAL}s"
+            say "$(date -u +%FT%TZ) bilan: $$n pings, $$ok ok, $$ko echecs, intervalle $${KEEPALIVE_INTERVAL}s"
+            # Rotation maison : le driver json-file ne gere pas ce fichier-ci.
+            if [ -f "$$LOG" ] && [ "$$(du -k "$$LOG" | cut -f1)" -gt "$${KEEPALIVE_LOG_MAX_KB:-512}" ]; then
+              tail -n 500 "$$LOG" > "$$LOG.tmp" && mv "$$LOG.tmp" "$$LOG"
+              say "$(date -u +%FT%TZ) log rote (500 dernieres lignes conservees)"
+            fi
           fi
           sleep "$$KEEPALIVE_INTERVAL"
         done
