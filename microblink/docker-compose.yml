@@ -104,3 +104,66 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+
+  # ── Maintien en vie de la licence ──────────────────────────
+  # La licence LIC03000074559 exige une permission serveur periodique. Les trois
+  # pannes constatees (2026-07-29, 2026-08-19) sont toutes survenues pendant des
+  # periodes d'INACTIVITE, et un scan toutes les 60 s avait maintenu la licence
+  # vivante 16 min d'affilee. L'inactivite est le meilleur suspect — non prouve,
+  # mais ce service coute assez peu pour ne pas attendre la preuve.
+  #
+  # Une fois la licence perdue le SDK n'y revient JAMAIS seul : seul un
+  # redemarrage du conteneur le recupere. Mieux vaut donc l'empecher de mourir
+  # que d'essayer de la ressusciter.
+  #
+  # Le scan porte sur un PNG blanc de 432 octets genere au demarrage : aucune
+  # piece d'identite ne circule, et la reponse attendue est un ECHEC structure
+  # (STRUCT_NOT_AN_ID_CARD) — ce qui prouve que toute la chaine a tourne.
+  keepalive:
+    image: curlimages/curl:8.11.1
+    restart: unless-stopped
+    depends_on:
+      ocr-api:
+        condition: service_started
+    environment:
+      # Intervalle entre deux pings, en secondes. 0 desactive le service sans
+      # avoir a le retirer du compose.
+      #
+      # 900 s = 96 scans/jour/noeud, soit ~5 800/mois pour deux noeuds. A ajuster
+      # selon le modele de facturation de la licence, qui n'est PAS documente ici :
+      # si elle est au volume, ce chiffre compte ; si elle est forfaitaire, on peut
+      # descendre a 300 s. Les pannes observees sont survenues apres des dizaines
+      # de minutes d'inactivite, donc 900 s reste largement sous le seuil connu.
+      KEEPALIVE_INTERVAL: ${KEEPALIVE_INTERVAL:-900}
+      KEEPALIVE_URL: http://ocr-api:8000/v1/scan
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        if [ "$${KEEPALIVE_INTERVAL:-900}" -le 0 ]; then
+          echo "keepalive desactive (KEEPALIVE_INTERVAL=0)"
+          # sleep infini plutot qu'un exit : un exit 0 avec restart:unless-stopped
+          # ferait boucler le conteneur en redemarrages permanents.
+          while true; do sleep 86400; done
+        fi
+        printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAABd0lEQVR42u3SMQ0AAAzDsPLH2GdMRmLHDktGECXtwLlIgLEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSyMpQLGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWBhLBYyFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjMU3CwnZ+fxhteCBAAAAAElFTkSuQmCC' \
+          | base64 -d > /tmp/ping.png
+        echo "keepalive demarre — un scan toutes les $${KEEPALIVE_INTERVAL}s vers $${KEEPALIVE_URL}"
+        # Laisse le temps a ocr-api de repondre : depends_on ne garantit que le
+        # demarrage du conteneur, pas que le serveur HTTP ecoute deja.
+        sleep 15
+        while true; do
+          body=$(curl -s -m 60 -w '\n%{http_code}' -X POST "$$KEEPALIVE_URL" -F "file=@/tmp/ping.png" 2>/dev/null || true)
+          code=$(printf '%s' "$$body" | tail -n1)
+          case "$$code" in
+            200) : ;;  # nominal : on ne log rien, sinon le fichier de log explose
+            503) echo "$(date -u +%FT%TZ) LICENCE PERDUE — le moteur ne reviendra pas seul, redemarrer le conteneur api" ;;
+            "")  echo "$(date -u +%FT%TZ) facade injoignable" ;;
+            *)   echo "$(date -u +%FT%TZ) reponse inattendue: HTTP $$code" ;;
+          esac
+          sleep "$$KEEPALIVE_INTERVAL"
+        done
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
