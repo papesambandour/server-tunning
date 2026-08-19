@@ -1052,8 +1052,39 @@ do_test_microblink() {
         done
     fi
 
+    # SCAN REEL — le seul controle qui vaille.
+    #
+    # /health reste au VERT pendant une panne de licence : le 2026-08-19 les
+    # deux noeuds repondaient sdk_readiness=UP alors que chaque reconnaissance
+    # renvoyait LICENCE_REFUSED. Un menu de test qui ne regarde que /health
+    # affiche donc "tout va bien" sur un service hors service.
+    #
+    # L'image ci-dessous est un PNG blanc de 200x200 (432 octets) embarque en
+    # base64 : pas besoin de deposer une piece d'identite sur le serveur, et une
+    # erreur STRUCTUREE prouve que toute la chaine a tourne — multipart recu,
+    # base64 encode, moteur appele, licence acceptee, verdict rendu.
+    printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAABd0lEQVR42u3SMQ0AAAzDsPLH2GdMRmLHDktGECXtwLlIgLEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSyMpQLGwlgYC4yFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjIWxMBYYC2NhLDAWxsJYYCyMhbHAWBgLY4GxMBbGAmNhLIwFxsJYGAuMhbEwFhgLY2EsMBbGwlhgLIyFscBYGAtjgbEwFsYCY2EsjAXGwlgYC4yFsTAWGAtjYSwwFsbCWBhLBYyFsTAWGAtjYSwwFsbCWGAsjIWxwFgYC2OBsTAWxgJjYSyMBcbCWBgLjMU3CwnZ+fxhteCBAAAAAElFTkSuQmCC' | base64 -d > /tmp/mb-test.png 2>/dev/null
+
+    printf "  scan reel           : "
+    MB_SCAN=$(curl -s -m 60 -X POST "http://127.0.0.1:$MB_API_PORT/v1/scan" \
+                   -F "file=@/tmp/mb-test.png" 2>/dev/null)
+    rm -f /tmp/mb-test.png
+
+    if echo "$MB_SCAN" | grep -q 'STRUCT_NOT_AN_ID_CARD'; then
+        echo -e "${GREEN}OK${NC}  (chaine complete fonctionnelle)"
+    elif echo "$MB_SCAN" | grep -q 'LICENCE_REFUSED'; then
+        echo -e "${RED}LICENCE REFUSEE${NC}"
+        echo -e "    Le moteur a perdu sa licence et ne la recuperera pas seul."
+        echo -e "    Corriger avec l'option M (redemarrage de la stack)."
+    elif [[ -z "$MB_SCAN" ]]; then
+        echo -e "${RED}AUCUNE REPONSE${NC}  -> facade injoignable"
+    else
+        echo -e "${YELLOW}INATTENDU${NC}"
+        echo -e "    ${MB_SCAN:0:160}"
+    fi
+
     echo ""
-    warn "Un vrai scan reste le seul controle fiable :"
+    warn "Avec une vraie piece, pour verifier l'extraction :"
     echo -e "    curl -X POST http://127.0.0.1:$MB_API_PORT/v1/scan -F \"file=@doc.jpg\""
     # if, et non `cmd && echo` : sous `set -e` un && faux en DERNIERE commande
     # ferait remonter un code 1 et sortir du script sur les noeuds sans LB.
