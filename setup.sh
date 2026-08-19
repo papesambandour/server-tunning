@@ -129,8 +129,30 @@ if [[ "$GUNICORN_WORKERS" == "auto" ]]; then
     [[ $GUNICORN_WORKERS -gt 24 ]] && GUNICORN_WORKERS=24
 fi
 
-# Detecter le serveur actuel
-CURRENT_IP=$(hostname -I | awk '{print $1}')
+# ── Identite du serveur ──────────────────────────────────────
+# host_has_ip : cette machine porte-t-elle CETTE adresse, sur n'importe quelle
+# interface ?
+#
+# On ne peut PAS se contenter de la premiere adresse de `hostname -I` : l'ordre
+# n'est pas garanti, et l'installation de Docker ajoute des passerelles de
+# bridge (172.17.0.1, 172.18.0.1...) qui passent devant l'IP reelle du serveur.
+# Constate le 2026-08-19 sur 10.0.92.66 : apres installation de Docker,
+# CURRENT_IP valait 172.18.0.1 et l'option Nginx refusait de s'executer sur le
+# serveur LB lui-meme.
+host_has_ip() { hostname -I 2>/dev/null | tr ' ' '\n' | grep -qx "$1"; }
+
+# IP d'affichage : on prefere une adresse DECLAREE dans le .env, sinon la
+# premiere qui ne soit pas une passerelle Docker, sinon la premiere tout court.
+detect_current_ip() {
+    local ip
+    for ip in "$NGINX_SERVER" "$SERVER1" "$SERVER2"; do
+        [[ -n "$ip" ]] && host_has_ip "$ip" && { echo "$ip"; return; }
+    done
+    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^(172\.(1[6-9]|2[0-9]|3[01])\.|127\.)' | head -1)
+    [[ -n "$ip" ]] && { echo "$ip"; return; }
+    hostname -I 2>/dev/null | awk '{print $1}'
+}
+CURRENT_IP=$(detect_current_ip)
 
 # ── Checks d'etat ────────────────────────────────────────────
 is_prereqs_installed()  { command -v git &>/dev/null && command -v curl &>/dev/null && command -v make &>/dev/null; }
@@ -196,7 +218,7 @@ show_status() {
         echo -e "    $(status_icon is_mb_running)  Stack Microblink active"
     fi
 
-    if [[ "$CURRENT_IP" == "$NGINX_SERVER" ]] || is_nginx_installed; then
+    if host_has_ip "$NGINX_SERVER" || is_nginx_installed; then
         echo ""
         echo -e "    $(status_icon is_nginx_installed)  Nginx installe"
         echo -e "    $(status_icon is_nginx_configured)  Nginx configure (LB API Python, :80)"
@@ -514,7 +536,7 @@ do_install_nginx() {
     # Ubuntu exposee sur le port 80 et un service de plus a maintenir. Sans
     # consequence fonctionnelle, mais ca brouille le diagnostic : on croit
     # avoir deux LB alors qu'un seul est configure.
-    if [[ "$CURRENT_IP" != "$NGINX_SERVER" ]]; then
+    if ! host_has_ip "$NGINX_SERVER"; then
         fail "Ce serveur n'est pas le serveur LB"
         echo -e "  IP de cette machine : $CURRENT_IP"
         echo -e "  Serveur LB declare  : $NGINX_SERVER"
@@ -892,7 +914,7 @@ print('OK')
     echo -e "  Serveur  : $CURRENT_IP"
     echo ""
     # Determiner l'autre serveur
-    if [[ "$CURRENT_IP" == "$SERVER1" ]]; then
+    if host_has_ip "$SERVER1"; then
         OTHER_SERVER="$SERVER2"
     else
         OTHER_SERVER="$SERVER1"
@@ -1146,7 +1168,7 @@ while true; do
     echo -e "    ${CYAN}3${NC}  Python + App + Service systemd"
     # En clair sur le serveur LB, grisee ailleurs : une option qu'on ne peut pas
     # choisir ne doit pas ressembler a une option qu'on peut choisir.
-    if [[ "$CURRENT_IP" == "$NGINX_SERVER" ]]; then
+    if host_has_ip "$NGINX_SERVER"; then
         echo -e "    ${CYAN}4${NC}  Nginx Load Balancer"
     else
         echo -e "    ${DIM}4  Nginx Load Balancer — indisponible, le LB est sur $NGINX_SERVER${NC}"
